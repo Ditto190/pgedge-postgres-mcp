@@ -608,7 +608,7 @@ connect_existing_instance() {
       local label="PostgreSQL"
       [ "${inst_confirmed[$i]:-false}" = "true" ] \
         || label="service (likely PostgreSQL)"
-      echo "    Port $port — connected as '$user'"
+      echo "    Port $port ($label) — connected as '$user'"
 
       # Show databases for this instance
       local found_db=false
@@ -644,7 +644,6 @@ connect_existing_instance() {
   echo "      $option_num) Start a demo database instead (Docker, Northwind)"
   option_type+=("demo")
   option_data+=("")
-  local demo_num=$option_num
   option_num=$((option_num + 1))
 
   echo "      $option_num) Enter connection details manually"
