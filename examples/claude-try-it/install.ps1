@@ -1296,7 +1296,11 @@ function Test-ExistingInstall {
                 }
             } else {
                 Write-Host ""
-                Write-Info "Nothing to do. Exiting."
+                Write-Info "Nothing to do."
+                Write-Host ""
+                Write-Host "  Claude Code:    start a new conversation"
+                Write-Host "  Claude Desktop: restart the app, then start chatting"
+                Write-Host ""
             }
         } else {
             Write-Info "Already up to date. Nothing to do."

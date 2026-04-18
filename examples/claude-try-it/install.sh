@@ -1288,7 +1288,11 @@ check_existing_install() {
           ;;
         *)
           echo ""
-          info "Nothing to do. Exiting."
+          info "Nothing to do."
+          echo ""
+          echo "  Claude Code:    start a new conversation"
+          echo "  Claude Desktop: restart the app, then start chatting"
+          echo ""
           ;;
       esac
     else
