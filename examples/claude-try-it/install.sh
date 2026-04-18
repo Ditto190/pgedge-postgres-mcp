@@ -403,6 +403,287 @@ detect_postgres_instances() {
   done
 }
 
+# ─── Try passwordless auth against a Postgres instance ─────────────────
+
+# Sets AUTH_USER on success, returns 1 on failure.
+# Requires psql on PATH.
+try_passwordless_auth() {
+  local port="$1"
+  AUTH_USER=""
+
+  if ! command -v psql &>/dev/null; then
+    return 1
+  fi
+
+  # Try 'postgres' user first (most common superuser)
+  if PGPASSWORD="" psql -h localhost -p "$port" -U postgres \
+       -w -c "SELECT 1" >/dev/null 2>&1; then
+    AUTH_USER="postgres"
+    return 0
+  fi
+
+  # Try current OS username
+  local os_user
+  os_user="$(whoami)"
+  if [ "$os_user" != "postgres" ]; then
+    if PGPASSWORD="" psql -h localhost -p "$port" -U "$os_user" \
+         -w -c "SELECT 1" >/dev/null 2>&1; then
+      AUTH_USER="$os_user"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# ─── List user databases on a Postgres instance ────────────────────────
+
+# Requires psql. Prints database names, one per line.
+# Filters out template and system databases.
+list_databases() {
+  local port="$1" user="$2" password="${3:-}"
+
+  PGPASSWORD="$password" psql -h localhost -p "$port" -U "$user" \
+    -w -t -A -c "
+    SELECT datname FROM pg_database
+    WHERE datistemplate = false
+      AND datname NOT IN ('postgres')
+    ORDER BY datname
+  " 2>/dev/null
+}
+
+# ─── Connect to an existing Postgres instance ──────────────────────────
+
+connect_existing_instance() {
+  local target_port="${1:-}"
+
+  # Build arrays of instance state
+  local -a inst_ports=()
+  local -a inst_confirmed=()
+  local -a inst_users=()
+  local -a inst_passwords=()
+  local -a inst_authed=()
+  local -a all_db_names=()
+  local -a all_db_ports=()
+  local -a all_db_users=()
+  local -a all_db_passwords=()
+
+  local has_psql=false
+  command -v psql &>/dev/null && has_psql=true
+
+  for i in "${!DETECTED_PORTS[@]}"; do
+    local port="${DETECTED_PORTS[$i]}"
+    local confirmed="${DETECTED_CONFIRMED[$i]}"
+
+    # If user specified a port, skip others
+    if [ -n "$target_port" ] && [ "$port" != "$target_port" ]; then
+      continue
+    fi
+
+    inst_ports+=("$port")
+    inst_confirmed+=("$confirmed")
+
+    if $has_psql && try_passwordless_auth "$port"; then
+      inst_users+=("$AUTH_USER")
+      inst_passwords+=("")
+      inst_authed+=("true")
+
+      # List databases on this instance
+      local dbs
+      dbs=$(list_databases "$port" "$AUTH_USER" "")
+      if [ -n "$dbs" ]; then
+        while IFS= read -r db; do
+          all_db_names+=("$db")
+          all_db_ports+=("$port")
+          all_db_users+=("$AUTH_USER")
+          all_db_passwords+=("")
+        done <<< "$dbs"
+      fi
+    else
+      inst_users+=("")
+      inst_passwords+=("")
+      inst_authed+=("false")
+    fi
+  done
+
+  if [ ${#inst_ports[@]} -eq 0 ]; then
+    warn "No instances to connect to."
+    return 1
+  fi
+
+  # --- Present the combined menu ---
+
+  echo ""
+  local option_num=1
+  local -a option_type=()
+  local -a option_data=()
+
+  for i in "${!inst_ports[@]}"; do
+    local port="${inst_ports[$i]}"
+    local user="${inst_users[$i]}"
+    local authed="${inst_authed[$i]}"
+
+    if [ "$authed" = "true" ]; then
+      local label="PostgreSQL"
+      [ "${inst_confirmed[$i]:-false}" = "true" ] \
+        || label="service (likely PostgreSQL)"
+      echo "    Port $port — connected as '$user'"
+
+      # Show databases for this instance
+      local found_db=false
+      for j in "${!all_db_names[@]}"; do
+        if [ "${all_db_ports[$j]}" = "$port" ]; then
+          echo "      $option_num) ${all_db_names[$j]}"
+          option_type+=("db")
+          option_data+=("$j")
+          option_num=$((option_num + 1))
+          found_db=true
+        fi
+      done
+
+      if ! $found_db; then
+        echo "      (no user databases found)"
+      fi
+    else
+      if $has_psql; then
+        echo "    Port $port — authentication required"
+      else
+        echo "    Port $port — psql not installed, cannot list databases"
+      fi
+      echo "      $option_num) Enter credentials for this instance"
+      option_type+=("auth")
+      option_data+=("$i")
+      option_num=$((option_num + 1))
+    fi
+
+    echo ""
+  done
+
+  echo "    Other options:"
+  echo "      $option_num) Start a demo database instead (Docker, Northwind)"
+  option_type+=("demo")
+  option_data+=("")
+  local demo_num=$option_num
+  option_num=$((option_num + 1))
+
+  echo "      $option_num) Enter connection details manually"
+  option_type+=("manual")
+  option_data+=("")
+  echo ""
+
+  local choice
+  ask "  Enter a number: " choice
+  choice="${choice:-1}"
+
+  # Validate choice is a number in range
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] \
+       || [ "$choice" -gt "${#option_type[@]}" ]; then
+    warn "Invalid choice. Defaulting to demo database."
+    setup_demo_database
+    return
+  fi
+
+  local idx=$((choice - 1))
+  case "${option_type[$idx]}" in
+    db)
+      local db_idx="${option_data[$idx]}"
+      DB_HOST="localhost"
+      DB_PORT="${all_db_ports[$db_idx]}"
+      DB_NAME="${all_db_names[$db_idx]}"
+      DB_USER="${all_db_users[$db_idx]}"
+      DB_PASS="${all_db_passwords[$db_idx]}"
+      DB_CONFIGURED=true
+      ok "Using database: $DB_NAME on localhost:$DB_PORT ($DB_USER)"
+      ;;
+    auth)
+      local inst_idx="${option_data[$idx]}"
+      local port="${inst_ports[$inst_idx]}"
+      prompt_credentials_and_list "$port"
+      ;;
+    demo)
+      setup_demo_database
+      ;;
+    manual)
+      setup_own_database
+      ;;
+  esac
+}
+
+# ─── Prompt for credentials and list databases ─────────────────────────
+
+prompt_credentials_and_list() {
+  local port="$1"
+  local attempts=0
+
+  while [ $attempts -lt 2 ]; do
+    echo ""
+    echo "  Connection to port $port requires authentication."
+    echo ""
+
+    local user pass
+    ask "  Username [postgres]: " user
+    user="${user:-postgres}"
+    ask_secret "  Password: " pass
+
+    if PGPASSWORD="$pass" psql -h localhost -p "$port" -U "$user" \
+         -w -c "SELECT 1" >/dev/null 2>&1; then
+      ok "Connected to port $port as '$user'"
+
+      local dbs
+      dbs=$(list_databases "$port" "$user" "$pass")
+      if [ -n "$dbs" ]; then
+        echo ""
+        echo "  Databases on port $port:"
+        local num=1
+        local -a db_arr=()
+        while IFS= read -r db; do
+          echo "    $num) $db"
+          db_arr+=("$db")
+          num=$((num + 1))
+        done <<< "$dbs"
+        echo ""
+
+        local db_choice
+        ask "  Enter a number (or type a database name): " db_choice
+
+        # Check if it's a number
+        if [[ "$db_choice" =~ ^[0-9]+$ ]] \
+             && [ "$db_choice" -ge 1 ] \
+             && [ "$db_choice" -le "${#db_arr[@]}" ]; then
+          DB_NAME="${db_arr[$((db_choice - 1))]}"
+        else
+          DB_NAME="$db_choice"
+        fi
+      else
+        echo ""
+        echo "  No user databases found on port $port."
+        echo ""
+        ask "  Database name: " DB_NAME
+        if [ -z "$DB_NAME" ]; then
+          warn "Database name is required."
+          DB_CONFIGURED=false
+          return
+        fi
+      fi
+
+      DB_HOST="localhost"
+      DB_PORT="$port"
+      DB_USER="$user"
+      DB_PASS="$pass"
+      DB_CONFIGURED=true
+      ok "Using database: $DB_NAME on localhost:$port ($user)"
+      return
+    fi
+
+    warn "Authentication failed."
+    attempts=$((attempts + 1))
+  done
+
+  warn "Could not connect to port $port. Try the manual option."
+  echo ""
+  setup_own_database
+}
+
 # ─── Clean up old demo containers ─────────────────────────────────────────
 
 cleanup_old_demos() {
