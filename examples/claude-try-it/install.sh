@@ -780,15 +780,17 @@ connect_existing_auto() {
   local target_port="${1:-}"
   local has_psql=false
   command -v psql &>/dev/null && has_psql=true
+  local matched_target=true
+  [ -n "$target_port" ] && matched_target=false
 
   for i in "${!DETECTED_PORTS[@]}"; do
     local port="${DETECTED_PORTS[$i]}"
     if [ -n "$target_port" ] && [ "$port" != "$target_port" ]; then
       continue
     fi
+    [ -n "$target_port" ] && matched_target=true
 
     if $has_psql && try_passwordless_auth "$port"; then
-      # If --db-name was specified, verify it exists
       if [ -n "$DB_NAME" ]; then
         local dbs
         dbs=$(list_databases "$port" "$AUTH_USER" "")
@@ -803,7 +805,6 @@ connect_existing_auto() {
         continue
       fi
 
-      # Otherwise pick first user database
       local first_db
       first_db=$(list_databases "$port" "$AUTH_USER" "" | head -1)
       if [ -n "$first_db" ]; then
@@ -817,8 +818,16 @@ connect_existing_auto() {
   done
 
   echo ""
-  echo "DETECT_AUTH_FAILED"
-  echo "Could not authenticate to any detected instance."
+  if ! $has_psql; then
+    echo "DETECT_PSQL_MISSING"
+    echo "psql is required for --detect auto-connection."
+  elif ! $matched_target; then
+    echo "DETECT_PORT_NOT_FOUND"
+    echo "No detected PostgreSQL instance on port $target_port."
+  else
+    echo "DETECT_AUTH_FAILED"
+    echo "Could not authenticate to any detected instance."
+  fi
   echo "Re-run with explicit credentials:"
   echo "  --own-db --db-host=HOST --db-port=PORT --db-name=DB --db-user=USER --db-pass=PASS"
   DB_CONFIGURED=false

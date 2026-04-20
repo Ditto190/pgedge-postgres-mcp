@@ -774,11 +774,14 @@ function Connect-ExistingAuto {
     param([string]$TargetPort)
 
     $hasPsql = [bool](Get-Command psql -ErrorAction SilentlyContinue)
+    $matchedTarget = if ([string]::IsNullOrWhiteSpace($TargetPort)) {
+        $true } else { $false }
 
     foreach ($inst in $script:DetectedInstances) {
         if ($TargetPort -and $inst.Port -ne [int]$TargetPort) {
             continue
         }
+        if ($TargetPort) { $matchedTarget = $true }
 
         if ($hasPsql -and (Test-PasswordlessAuth -Port $inst.Port)) {
             if ($script:DbName) {
@@ -813,8 +816,16 @@ function Connect-ExistingAuto {
     }
 
     Write-Host ""
-    Write-Host "DETECT_AUTH_FAILED"
-    Write-Host "Could not authenticate to any detected instance."
+    if (-not $hasPsql) {
+        Write-Host "DETECT_PSQL_MISSING"
+        Write-Host "psql is required for -Detect auto-connection."
+    } elseif (-not $matchedTarget) {
+        Write-Host "DETECT_PORT_NOT_FOUND"
+        Write-Host "No detected PostgreSQL instance on port $TargetPort."
+    } else {
+        Write-Host "DETECT_AUTH_FAILED"
+        Write-Host "Could not authenticate to any detected instance."
+    }
     Write-Host "Re-run with explicit credentials:"
     Write-Host "  -OwnDb -DbHost HOST -DbPort PORT -DbName DB -DbUser USER -DbPass PASS"
     $script:DbConfigured = $false
