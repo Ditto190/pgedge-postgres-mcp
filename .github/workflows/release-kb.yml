@@ -25,6 +25,9 @@ jobs:
                   ref: ${{ github.event.inputs.branch }}
                   fetch-depth: 0
 
+            - name: Clean build artifacts from previous runs
+              run: rm -rf bin/ pgedge-nla-kb-builder examples/pgedge-nla-kb-builder-build.yaml
+
             - name: Validate allowed build ref
               env:
                   BUILD_REF: ${{ github.event.inputs.branch }}
@@ -46,6 +49,7 @@ jobs:
               run: |
                   [ -n "$PGEDGE_BUILDER_TOKEN" ] || { echo "PGEDGE_BUILDER_TOKEN secret is missing"; exit 1; }
                   echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+                  GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig" git config --global credential.helper ""
                   GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig" git config --global url."https://x-access-token:${PGEDGE_BUILDER_TOKEN}@github.com/".insteadOf "https://github.com/"
 
             - name: Start Ollama service
