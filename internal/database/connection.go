@@ -482,7 +482,13 @@ func (c *Client) LoadMetadataFor(connStr string) error {
 	columnCount := 0
 
 	for rows.Next() {
-		var schemaName, tableName, tableType, tableDesc, columnName, dataType, isNullable, columnDesc string
+		// columnName, dataType, and isNullable come from the LEFT JOIN against
+		// column_info; they are NULL for tables that have zero columns
+		// (e.g. CREATE TABLE foo();). Scan them as NullString so the row
+		// scan does not abort the entire metadata load — the row is then
+		// skipped below by the columnName.Valid check. See issue #126.
+		var schemaName, tableName, tableType, tableDesc, columnDesc string
+		var columnName, dataType, isNullable sql.NullString
 		var isPartitioned, isPartition bool
 		var typeName sql.NullString
 		var typeModifier sql.NullInt32
@@ -512,7 +518,7 @@ func (c *Client) LoadMetadataFor(connStr string) error {
 			}
 		}
 
-		if columnName != "" {
+		if columnName.Valid && columnName.String != "" {
 			// Detect vector columns and extract dimensions
 			isVector := false
 			dimensions := 0
@@ -520,7 +526,7 @@ func (c *Client) LoadMetadataFor(connStr string) error {
 				isVector = true
 				// Parse dimensions from data_type (e.g., "vector(1536)")
 				re := regexp.MustCompile(`vector\((\d+)\)`)
-				if matches := re.FindStringSubmatch(dataType); len(matches) > 1 {
+				if matches := re.FindStringSubmatch(dataType.String); len(matches) > 1 {
 					if dim, err := strconv.Atoi(matches[1]); err == nil {
 						dimensions = dim
 					}
@@ -528,9 +534,9 @@ func (c *Client) LoadMetadataFor(connStr string) error {
 			}
 
 			table.Columns = append(table.Columns, ColumnInfo{
-				ColumnName:       columnName,
-				DataType:         dataType,
-				IsNullable:       isNullable,
+				ColumnName:       columnName.String,
+				DataType:         dataType.String,
+				IsNullable:       isNullable.String,
 				Description:      columnDesc,
 				IsPrimaryKey:     isPrimaryKey,
 				IsUnique:         isUnique,

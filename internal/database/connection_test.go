@@ -11,6 +11,8 @@
 package database
 
 import (
+	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -471,4 +473,75 @@ func searchString(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestLoadMetadata_TableWithNoColumns is a regression test for issue #126.
+//
+// Before the fix, LoadMetadata's row scan declared columnName/dataType/
+// isNullable as plain string. The metadata query LEFT JOINs against
+// column_info, so a table with zero columns (e.g. CREATE TABLE foo()) yields
+// a row whose ci.* fields are all NULL — pgx then aborts the row scan with
+// "cannot scan NULL into *string", failing the entire metadata load and
+// surfacing as the misleading "no database connection configured" error.
+//
+// This test creates such a table, loads metadata, and asserts that the load
+// succeeds and that the empty table is present in the metadata with zero
+// columns. It is gated on TEST_PGEDGE_POSTGRES_CONNECTION_STRING, matching
+// the convention used by tests in the test/ package.
+func TestLoadMetadata_TableWithNoColumns(t *testing.T) {
+	connStr := os.Getenv("TEST_PGEDGE_POSTGRES_CONNECTION_STRING")
+	if connStr == "" {
+		t.Skip("TEST_PGEDGE_POSTGRES_CONNECTION_STRING not set; skipping live-DB regression test for issue #126")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Use a dedicated pool to set up and tear down the fixture so we do not
+	// interfere with whatever the Client builds internally.
+	setupPool, err := pgxpool.New(ctx, connStr)
+	if err != nil {
+		t.Fatalf("failed to open setup pool: %v", err)
+	}
+	defer setupPool.Close()
+
+	const tableName = "pgedge_mcp_issue126_empty"
+	if _, err := setupPool.Exec(ctx, "DROP TABLE IF EXISTS public."+tableName); err != nil {
+		t.Fatalf("failed to drop preexisting fixture table: %v", err)
+	}
+	if _, err := setupPool.Exec(ctx, "CREATE TABLE public."+tableName+"()"); err != nil {
+		t.Fatalf("failed to create empty-columns fixture table: %v", err)
+	}
+	defer func() {
+		_, _ = setupPool.Exec(context.Background(), "DROP TABLE IF EXISTS public."+tableName)
+	}()
+
+	client := NewClientWithConnectionString(connStr, nil)
+	defer client.Close()
+
+	if err := client.ConnectTo(connStr); err != nil {
+		t.Fatalf("ConnectTo failed: %v", err)
+	}
+
+	if err := client.LoadMetadataFor(connStr); err != nil {
+		t.Fatalf("LoadMetadataFor returned error for database containing a zero-column table; this is the regression in issue #126: %v", err)
+	}
+
+	meta := client.GetMetadataFor(connStr)
+	key := "public." + tableName
+	tableInfo, ok := meta[key]
+	if !ok {
+		t.Fatalf("expected metadata to contain %q, got keys: %v", key, mapKeys(meta))
+	}
+	if len(tableInfo.Columns) != 0 {
+		t.Errorf("expected empty-columns table to have 0 columns, got %d", len(tableInfo.Columns))
+	}
+}
+
+func mapKeys(m map[string]TableInfo) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
