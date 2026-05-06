@@ -189,6 +189,12 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Detect a JSON-RPC notification: a Request object without an "id" member
+	// (per JSON-RPC 2.0 §4.1). Note that "id": null is a valid request id and
+	// is NOT a notification, so we must inspect the raw JSON — interface{}
+	// unmarshaling collapses "absent" and "null" to the same nil value.
+	isNotification := !hasIDField(body)
+
 	// Set up tracing context
 	tokenHash := auth.GetTokenHashFromContext(ctx)
 	sessionID := tokenHash
@@ -205,12 +211,30 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Debug logging: log incoming request
 	if s.debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Incoming request: method=%s id=%v ip=%s\n", req.Method, req.ID, ipAddress)
+		fmt.Fprintf(os.Stderr, "[DEBUG] Incoming request: method=%s id=%v ip=%s notification=%t\n",
+			req.Method, req.ID, ipAddress, isNotification)
 		if req.Params != nil {
 			if paramsJSON, err := json.Marshal(req.Params); err == nil {
 				fmt.Fprintf(os.Stderr, "[DEBUG] Request params: %s\n", string(paramsJSON))
 			}
 		}
+	}
+
+	// Per JSON-RPC 2.0 §4.1 ("The Server MUST NOT reply to a Notification")
+	// and the MCP streamable HTTP transport spec ("If the input consists
+	// solely of (any number of) JSON-RPC responses or notifications: ...
+	// the server MUST return HTTP status code 202 Accepted with no body"),
+	// short-circuit notifications before dispatch. This applies uniformly
+	// to known notification methods (e.g. notifications/initialized) and
+	// unknown ones — replying with -32601 Method not found to a
+	// notification would be doubly wrong (replying when forbidden, and
+	// replying without an id, which is itself a malformed JSON-RPC body).
+	if isNotification {
+		tracing.LogHTTPResponse(sessionID, tokenHash, requestID,
+			r.Method, "/mcp/v1", http.StatusAccepted, nil,
+			time.Since(httpStart))
+		w.WriteHeader(http.StatusAccepted)
+		return
 	}
 
 	// Handle the request and capture the response (pass context with IP address)
@@ -236,18 +260,16 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleRequestHTTP handles a JSON-RPC request and returns the response
+// handleRequestHTTP handles a JSON-RPC request and returns the response.
+//
+// Notifications (requests without an "id" member, per JSON-RPC 2.0 §4.1) are
+// filtered out by handleHTTPRequest before reaching this function and are
+// answered with 202 Accepted and an empty body. As a result, every dispatch
+// path here corresponds to a request that requires a response.
 func (s *Server) handleRequestHTTP(ctx context.Context, req JSONRPCRequest) JSONRPCResponse {
 	switch req.Method {
 	case "initialize":
 		return s.handleInitializeHTTP(req)
-	case "notifications/initialized":
-		// Client notification - return empty response
-		return JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result:  json.RawMessage(`{}`),
-		}
 	case "tools/list":
 		return s.handleToolsListHTTP(ctx, req)
 	case "tools/call":
@@ -545,6 +567,21 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 // Helper functions
+
+// hasIDField reports whether the given raw JSON-RPC message body has an "id"
+// member at its top level. This is used to distinguish a JSON-RPC notification
+// (no id member) from a request whose id is explicitly null — the JSON-RPC 2.0
+// spec treats these very differently, but Go's interface{} unmarshaling
+// collapses both to nil. We probe the raw bytes via json.RawMessage so we do
+// not have to re-parse the entire payload.
+func hasIDField(body []byte) bool {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return false
+	}
+	_, ok := probe["id"]
+	return ok
+}
 
 func sendHTTPError(w http.ResponseWriter, id interface{}, code int, message string, data interface{}) {
 	response := createErrorResponse(id, code, message, data)

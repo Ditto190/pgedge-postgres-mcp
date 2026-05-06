@@ -786,26 +786,75 @@ func TestHandleNotificationsInitialized(t *testing.T) {
 	tools := &mockToolProvider{}
 	server := NewServer(tools)
 
-	rpcReq := JSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "notifications/initialized",
-	}
-
-	body, _ := json.Marshal(rpcReq)
+	// A real JSON-RPC notification has NO "id" member (per §4.1). The server
+	// must respond with 202 Accepted and an empty body.
+	body := []byte(`{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
 	server.handleHTTPRequest(w, req)
 
+	if w.Code != http.StatusAccepted {
+		t.Errorf("expected status 202 Accepted for a notification, got %d", w.Code)
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("expected empty body for a notification, got %q", w.Body.String())
+	}
+}
+
+func TestHandleNotification_UnknownMethod(t *testing.T) {
+	// Per the issue, sending -32601 Method not found in response to a
+	// notification is doubly wrong: the server must not reply at all, and
+	// the reply has no id (which is itself a malformed JSON-RPC body).
+	tools := &mockToolProvider{}
+	server := NewServer(tools)
+
+	for _, method := range []string{
+		"notifications/cancelled",
+		"notifications/roots/list_changed",
+		"some/unknown/notification",
+	} {
+		t.Run(method, func(t *testing.T) {
+			body := []byte(`{"jsonrpc":"2.0","method":"` + method + `","params":{}}`)
+			req := httptest.NewRequest(http.MethodPost, "/mcp/v1", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+
+			server.handleHTTPRequest(w, req)
+
+			if w.Code != http.StatusAccepted {
+				t.Errorf("expected status 202 Accepted, got %d", w.Code)
+			}
+			if w.Body.Len() != 0 {
+				t.Errorf("expected empty body, got %q", w.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleNotification_NullIDIsRequest(t *testing.T) {
+	// JSON-RPC 2.0 distinguishes "id absent" (notification, no reply) from
+	// "id: null" (a request whose id happens to be null; reply required).
+	// A request with explicit null id targeting an unknown method must
+	// receive a -32601 response with id == null, not 202 Accepted.
+	tools := &mockToolProvider{}
+	server := NewServer(tools)
+
+	body := []byte(`{"jsonrpc":"2.0","id":null,"method":"unknown/method"}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	server.handleHTTPRequest(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200 for a request with null id, got %d", w.Code)
+	}
+
 	var response JSONRPCResponse
 	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-
-	// Should return empty response without error
-	if response.Error != nil {
-		t.Fatalf("unexpected error: %v", response.Error)
+	if response.Error == nil || response.Error.Code != -32601 {
+		t.Errorf("expected -32601 Method not found, got %+v", response.Error)
 	}
 }
 

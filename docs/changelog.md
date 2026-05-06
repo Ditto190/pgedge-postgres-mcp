@@ -11,6 +11,15 @@ and this project adheres to
 
 ### Fixed
 
+- HTTP transport now returns `202 Accepted` with an empty body for
+  JSON-RPC notifications, per JSON-RPC 2.0 §4.1 and the MCP streamable
+  HTTP transport spec. Previously, the server replied to notifications
+  with a `200 OK` response that had no `id` field, which is itself not
+  a valid JSON-RPC message and caused strict clients (such as the .NET
+  MCP SDK) to throw on every notification. Unknown notification methods
+  are now also acknowledged silently rather than receiving a `-32601`
+  error reply. (#142)
+
 - Database switching via `select_database_connection` now persists
   correctly in HTTP mode for unbound API tokens.
   `GetAccessibleDatabases` previously returned only the first
