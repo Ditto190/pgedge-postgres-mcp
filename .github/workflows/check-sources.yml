@@ -212,7 +212,7 @@ jobs:
 
                   def sources_bounds(text):
                       """Return (after_sources, sources_end) positions."""
-                      sm = re.search(r'(?m)^sources:', text)
+                      sm = re.search(r'(?m)^sources:\s*(?:#.*)?$', text)
                       if not sm:
                           return None, None
                       # Match any top-level key (with or without an inline value)
