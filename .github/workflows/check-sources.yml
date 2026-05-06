@@ -182,22 +182,21 @@ jobs:
               # Fix SSH URLs in-place (any org, not just pgEdge)
               fixed = re.sub(r'git@github\.com:([^/]+)/', r'https://github.com/\1/', fixed)
 
-              # Append missing entries grouped by component
+              # Insert missing entries adjacent to existing entries for the same URL,
+              # falling back to end of sources: block when no existing entry found.
               if missing_entries:
-                  new_entries = []
-                  seen_components = {}
+                  # Group blocks by normalized URL so all versions of a component
+                  # are inserted together next to the existing entries for that URL.
+                  url_groups = {}
                   for k, e in missing_entries.items():
                       raw_url = clean_url(e.get("kb_git_source") or e.get("upstream_git_source", ""))
+                      norm    = normalize_url(raw_url)
                       ref     = e.get("kb_tag") or e.get("kb_branch") or \
                                 e.get("upstream_tag") or e.get("upstream_branch", "")
                       doc     = e.get("kb_doc_path") or e.get("upstream_doc_path", "")
                       ref_key = "tag" if (e.get("kb_tag") or e.get("upstream_tag")) and \
                                          not (e.get("kb_branch") or e.get("upstream_branch")) \
                                 else "branch"
-                      component = e.get("name", "")
-                      if component not in seen_components:
-                          seen_components[component] = True
-                          new_entries.append(f"\n    # {component} — added by auto/sync-kb-builder")
                       block = (
                           f"\n    - git_url: \"{raw_url}\""
                           f"\n      {ref_key}: \"{ref}\""
@@ -206,9 +205,86 @@ jobs:
                       )
                       if e.get("version", ""):
                           block += f"\n      project_version: \"{e.get('version')}\""
-                      new_entries.append(block)
+                      if norm not in url_groups:
+                          url_groups[norm] = {"comment": f"\n    # {e.get('name','')} — added by auto/sync-kb-builder",
+                                              "blocks": [], "raw_url": raw_url}
+                      url_groups[norm]["blocks"].append(block)
 
-                  fixed = fixed.rstrip() + "\n" + "\n".join(new_entries) + "\n"
+                  def sources_bounds(text):
+                      """Return (after_sources, sources_end) positions."""
+                      sm = re.search(r'(?m)^sources:\s*(?:#.*)?$', text)
+                      if not sm:
+                          return None, None
+                      # Match any top-level key (with or without an inline value)
+                      # e.g. "embeddings:", "kind: kb-builder", "version: 2"
+                      ns = re.search(r'(?m)^(?!\s|#)[^:\n]+:', text[sm.end():])
+                      return sm.end(), sm.end() + ns.start() if ns else len(text)
+
+                  for norm_url, grp in url_groups.items():
+                      after_sources, sources_end = sources_bounds(fixed)
+                      if after_sources is None:
+                          fixed = fixed.rstrip() + "\n" + grp["comment"] + "".join(grp["blocks"]) + "\n"
+                          continue
+                      sources_text = fixed[after_sources:sources_end]
+                      # Find all existing entries with a normalized-equal URL.
+                      # Normalized comparison handles missing .git, case, etc.
+                      matches = [
+                          m for m in re.finditer(
+                              r'(?m)^    - git_url:\s*"([^"]+)"\s*$',
+                              sources_text
+                          )
+                          if normalize_url(m.group(1)) == norm_url
+                      ]
+                      if matches:
+                          # Existing entries found — insert each new block in descending
+                          # version order without repeating the comment header.
+                          for new_block in grp["blocks"]:
+                              # Re-compute bounds and matches after each insertion
+                              after_sources, sources_end = sources_bounds(fixed)
+                              sources_text = fixed[after_sources:sources_end]
+                              cur_matches = [
+                                  m for m in re.finditer(
+                                      r'(?m)^    - git_url:\s*"([^"]+)"\s*$',
+                                      sources_text
+                                  )
+                                  if normalize_url(m.group(1)) == norm_url
+                              ]
+                              ver_match = re.search(r'project_version:\s*"([^"]+)"', new_block)
+                              new_ver = version_key(ver_match.group(1) if ver_match else "")
+                              # Find first existing entry with a lower version
+                              insert_before = None
+                              for m in cur_matches:
+                                  nxt_m = re.search(r'\n    - ', sources_text[m.end():])
+                                  block_end = m.end() + nxt_m.start() if nxt_m else len(sources_text)
+                                  ver_m = (re.search(r'project_version:\s*"([^"]+)"',
+                                                     sources_text[m.start():block_end]) or
+                                           re.search(r'(?:tag|branch):\s*"([^"]*)"',
+                                                     sources_text[m.start():block_end]))
+                                  if new_ver > version_key(ver_m.group(1) if ver_m else ""):
+                                      insert_before = m.start()
+                                      break
+                              if insert_before is not None:
+                                  # Strip leading \n from new_block — the existing blank line
+                                  # before the entry already provides the separator.
+                                  fixed = (fixed[:after_sources + insert_before]
+                                           + new_block.lstrip("\n") + "\n\n"
+                                           + fixed[after_sources + insert_before:])
+                              elif not cur_matches:
+                                  # Guard: prior insertion disrupted structure — append at sources end
+                                  fixed = fixed[:sources_end] + "\n" + new_block + "\n" + fixed[sources_end:]
+                              else:
+                                  # New version is lowest — append after last matching entry
+                                  last = cur_matches[-1]
+                                  nxt = re.search(r'\n    - ', sources_text[last.end():])
+                                  if nxt:
+                                      ins = after_sources + last.end() + nxt.start()
+                                      fixed = fixed[:ins] + "\n" + new_block + fixed[ins:]
+                                  else:
+                                      fixed = fixed[:sources_end] + "\n" + new_block + "\n" + fixed[sources_end:]
+                      else:
+                          # No existing entry for this URL — add comment + blocks at end of sources
+                          group_text = grp["comment"] + "".join(grp["blocks"])
+                          fixed = fixed[:sources_end] + "\n" + group_text + "\n" + fixed[sources_end:]
 
               with open(CONSUMER_FILE, "w") as f:
                   f.write(fixed)
