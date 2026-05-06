@@ -182,22 +182,21 @@ jobs:
               # Fix SSH URLs in-place (any org, not just pgEdge)
               fixed = re.sub(r'git@github\.com:([^/]+)/', r'https://github.com/\1/', fixed)
 
-              # Append missing entries grouped by component
+              # Insert missing entries adjacent to existing entries for the same URL,
+              # falling back to end of sources: block when no existing entry found.
               if missing_entries:
-                  new_entries = []
-                  seen_components = {}
+                  # Group blocks by normalized URL so all versions of a component
+                  # are inserted together next to the existing entries for that URL.
+                  url_groups = {}
                   for k, e in missing_entries.items():
                       raw_url = clean_url(e.get("kb_git_source") or e.get("upstream_git_source", ""))
+                      norm    = normalize_url(raw_url)
                       ref     = e.get("kb_tag") or e.get("kb_branch") or \
                                 e.get("upstream_tag") or e.get("upstream_branch", "")
                       doc     = e.get("kb_doc_path") or e.get("upstream_doc_path", "")
                       ref_key = "tag" if (e.get("kb_tag") or e.get("upstream_tag")) and \
                                          not (e.get("kb_branch") or e.get("upstream_branch")) \
                                 else "branch"
-                      component = e.get("name", "")
-                      if component not in seen_components:
-                          seen_components[component] = True
-                          new_entries.append(f"\n    # {component} — added by auto/sync-kb-builder")
                       block = (
                           f"\n    - git_url: \"{raw_url}\""
                           f"\n      {ref_key}: \"{ref}\""
@@ -206,20 +205,38 @@ jobs:
                       )
                       if e.get("version", ""):
                           block += f"\n      project_version: \"{e.get('version')}\""
-                      new_entries.append(block)
+                      if norm not in url_groups:
+                          url_groups[norm] = {"comment": f"\n    # {e.get('name','')} — added by auto/sync-kb-builder",
+                                              "blocks": [], "raw_url": raw_url}
+                      url_groups[norm]["blocks"].append(block)
 
-                  # Insert inside the sources: block, before the next top-level section
-                  sources_match = re.search(r'\nsources:', fixed)
-                  if sources_match:
-                      after_sources = sources_match.end()
-                      next_section = re.search(r'\n([a-z_][a-z_]*:)', fixed[after_sources:])
-                      if next_section:
-                          insert_at = after_sources + next_section.start(0)
-                          fixed = fixed[:insert_at] + "\n" + "\n".join(new_entries) + fixed[insert_at:]
+                  def sources_bounds(text):
+                      """Return (after_sources, sources_end) positions."""
+                      sm = re.search(r'(?m)^sources:\s*$', text)
+                      if not sm:
+                          return None, None
+                      ns = re.search(r'(?m)^(?!\s|#)[^:]+:\s*$', text[sm.end():])
+                      return sm.end(), sm.end() + ns.start() if ns else len(text)
+
+                  for norm_url, grp in url_groups.items():
+                      group_text = grp["comment"] + "".join(grp["blocks"])
+                      after_sources, sources_end = sources_bounds(fixed)
+                      if after_sources is None:
+                          fixed = fixed.rstrip() + "\n" + group_text + "\n"
+                          continue
+                      sources_text = fixed[after_sources:sources_end]
+                      # Find the last entry in sources with this URL
+                      matches = list(re.finditer(re.escape(grp["raw_url"]), sources_text, re.IGNORECASE))
+                      if matches:
+                          last_pos = matches[-1].start()
+                          # Advance to end of this entry block (next list item at same indent)
+                          nxt = re.search(r'\n    - ', sources_text[last_pos:])
+                          insert_rel = last_pos + nxt.start() if nxt else len(sources_text)
+                          insert_at = after_sources + insert_rel
                       else:
-                          fixed = fixed.rstrip() + "\n" + "\n".join(new_entries) + "\n"
-                  else:
-                      fixed = fixed.rstrip() + "\n" + "\n".join(new_entries) + "\n"
+                          # No existing entry for this URL — place at end of sources block
+                          insert_at = sources_end
+                      fixed = fixed[:insert_at] + "\n" + group_text + fixed[insert_at:]
 
               with open(CONSUMER_FILE, "w") as f:
                   f.write(fixed)
