@@ -63,6 +63,18 @@ sources:
       project_version: "1.0.0-beta1"
 
     - git_url: "https://github.com/pgEdge/3rd-party-docs.git"
+      branch: "patroni413"
+      doc_path: "docs"
+      project_name: "patroni"
+      project_version: "4.1.3"
+
+    - git_url: "https://github.com/pgEdge/3rd-party-docs.git"
+      branch: "patroni412"
+      doc_path: "docs"
+      project_name: "patroni"
+      project_version: "4.1.2"
+
+    - git_url: "https://github.com/pgEdge/3rd-party-docs.git"
       branch: "patroni411"
       doc_path: "docs"
       project_name: "patroni"
@@ -185,6 +197,12 @@ sources:
       doc_path: "docs"
       project_name: "pgEdge Helm"
       project_version: "0.1.0"
+
+    - git_url: "https://github.com/pgEdge/ace.git"
+      tag: "v2.0.0"
+      doc_path: "docs"
+      project_name: "pgEdge ACE"
+      project_version: "2.0.0"
 
     - git_url: "https://github.com/pgEdge/ace.git"
       tag: "v1.9.0"
