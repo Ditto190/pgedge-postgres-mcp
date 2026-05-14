@@ -15,7 +15,19 @@ sources:
       project_version: "18"
 
     - git_url: "https://github.com/postgres/postgres.git"
+      tag: "REL_18_4"
+      doc_path: "doc/src/sgml"
+      project_name: "PostgreSQL"
+      project_version: "18"
+
+    - git_url: "https://github.com/postgres/postgres.git"
       tag: "REL_17_9"
+      doc_path: "doc/src/sgml"
+      project_name: "PostgreSQL"
+      project_version: "17"
+
+    - git_url: "https://github.com/postgres/postgres.git"
+      tag: "REL_17_10"
       doc_path: "doc/src/sgml"
       project_name: "PostgreSQL"
       project_version: "17"
@@ -27,7 +39,19 @@ sources:
       project_version: "16"
 
     - git_url: "https://github.com/postgres/postgres.git"
+      tag: "REL_16_14"
+      doc_path: "doc/src/sgml"
+      project_name: "PostgreSQL"
+      project_version: "16"
+
+    - git_url: "https://github.com/postgres/postgres.git"
       tag: "REL_15_17"
+      doc_path: "doc/src/sgml"
+      project_name: "PostgreSQL"
+      project_version: "15"
+
+    - git_url: "https://github.com/postgres/postgres.git"
+      tag: "REL_15_18"
       doc_path: "doc/src/sgml"
       project_name: "PostgreSQL"
       project_version: "15"
@@ -38,6 +62,12 @@ sources:
       project_name: "PostgreSQL"
       project_version: "14"
 
+
+    - git_url: "https://github.com/postgres/postgres.git"
+      tag: "REL_14_23"
+      doc_path: "doc/src/sgml"
+      project_name: "PostgreSQL"
+      project_version: "14"
     - git_url: "https://github.com/pgEdge/3rd-party-docs.git"
       branch: "pgadmin913"
       doc_path: "docs"
