@@ -208,6 +208,9 @@ func (s *Server) handleInitialize(req JSONRPCRequest) {
 }
 
 func (s *Server) handlePing(req JSONRPCRequest) {
+	if req.ID == nil {
+		return
+	}
 	sendResponse(req.ID, map[string]interface{}{})
 }
 
