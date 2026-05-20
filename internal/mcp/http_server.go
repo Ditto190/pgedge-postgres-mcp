@@ -270,6 +270,12 @@ func (s *Server) handleRequestHTTP(ctx context.Context, req JSONRPCRequest) JSON
 	switch req.Method {
 	case "initialize":
 		return s.handleInitializeHTTP(req)
+	case "ping":
+		return JSONRPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  map[string]interface{}{},
+		}
 	case "tools/list":
 		return s.handleToolsListHTTP(ctx, req)
 	case "tools/call":

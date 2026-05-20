@@ -135,6 +135,8 @@ func (s *Server) handleRequest(req JSONRPCRequest) {
 	switch req.Method {
 	case "initialize":
 		s.handleInitialize(req)
+	case "ping":
+		s.handlePing(req)
 	case "notifications/initialized":
 		// Client notification - no response needed
 	case "tools/list":
@@ -203,6 +205,10 @@ func (s *Server) handleInitialize(req JSONRPCRequest) {
 	}
 
 	sendResponse(req.ID, result)
+}
+
+func (s *Server) handlePing(req JSONRPCRequest) {
+	sendResponse(req.ID, map[string]interface{}{})
 }
 
 func (s *Server) handleToolsList(req JSONRPCRequest) {

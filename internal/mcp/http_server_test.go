@@ -858,6 +858,40 @@ func TestHandleNotification_NullIDIsRequest(t *testing.T) {
 	}
 }
 
+func TestHandlePing(t *testing.T) {
+	tools := &mockToolProvider{}
+	server := NewServer(tools)
+
+	rpcReq := JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "ping",
+	}
+
+	body, _ := json.Marshal(rpcReq)
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	server.handleHTTPRequest(w, req)
+
+	var response JSONRPCResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Error != nil {
+		t.Fatalf("unexpected error: %v", response.Error)
+	}
+
+	result, ok := response.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected result object, got %T", response.Result)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty object result for ping, got %v", result)
+	}
+}
+
 func TestHandleUnknownMethod(t *testing.T) {
 	tools := &mockToolProvider{}
 	server := NewServer(tools)

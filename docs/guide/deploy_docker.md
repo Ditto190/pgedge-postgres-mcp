@@ -72,6 +72,15 @@ PGEDGE_DB_SSLMODE=prefer
     or [Environment Variable Configuration](env_variable_config.md) for
     details.
 
+!!! tip "Local-only Claude `mcp-remote` and multi-database switching"
+    If you are running locally and connecting Claude via a fixed bearer token
+    header, API-token access may be constrained to a single database context.
+    For trusted local development only, you can disable HTTP authentication:
+    ```bash
+    PGEDGE_AUTH_ENABLED=false
+    ```
+    Do **not** disable authentication in shared or production environments.
+
 Specify the name of your embedding provider in the `EMBEDDING PROVIDER CONFIGURATION` section:
 
 ```bash

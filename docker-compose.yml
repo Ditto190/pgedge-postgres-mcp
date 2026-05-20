@@ -10,13 +10,16 @@ services:
         environment:
             # HTTP mode (required for web client and API access)
             - PGEDGE_HTTP_ENABLED=true
+            # Authentication (set to false only for trusted local development)
+            - PGEDGE_AUTH_ENABLED=${PGEDGE_AUTH_ENABLED:-true}
             # Database connection (single database)
-            - PGEDGE_DB_HOST=${PGEDGE_DB_HOST}
+            - PGEDGE_DB_HOST=${PGEDGE_DB_HOST:-}
             - PGEDGE_DB_PORT=${PGEDGE_DB_PORT:-5432}
-            - PGEDGE_DB_NAME=${PGEDGE_DB_NAME}
-            - PGEDGE_DB_USER=${PGEDGE_DB_USER}
-            - PGEDGE_DB_PASSWORD=${PGEDGE_DB_PASSWORD}
+            - PGEDGE_DB_NAME=${PGEDGE_DB_NAME:-}
+            - PGEDGE_DB_USER=${PGEDGE_DB_USER:-}
+            - PGEDGE_DB_PASSWORD=${PGEDGE_DB_PASSWORD:-}
             - PGEDGE_DB_SSLMODE=${PGEDGE_DB_SSLMODE:-prefer}
+            - PGEDGE_DB_ALLOW_WRITES=${PGEDGE_DB_ALLOW_WRITES:-false}
             # Multiple databases (use PGEDGE_DB_N_* pattern, supports 1-10)
             - PGEDGE_DB_1_NAME=${PGEDGE_DB_1_NAME:-}
             - PGEDGE_DB_1_HOST=${PGEDGE_DB_1_HOST:-}
@@ -146,6 +149,7 @@ services:
             - PGEDGE_DEBUG=${PGEDGE_DEBUG:-false}
             - PGEDGE_DB_LOG_LEVEL=${PGEDGE_DB_LOG_LEVEL:-none}
             - PGEDGE_LLM_LOG_LEVEL=${PGEDGE_LLM_LOG_LEVEL:-none}
+            - PGEDGE_TRACE_FILE=${PGEDGE_TRACE_FILE:-}
         volumes:
             # Persistent data volume for:
             # - Authentication tokens (tokens.json)
