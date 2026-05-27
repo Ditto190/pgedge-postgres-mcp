@@ -197,10 +197,32 @@ func buildTokenUsage(provider string, u llm.TokenUsage) *TokenUsage {
 	}
 }
 
+// providerDisplay returns a human-friendly capitalisation of a
+// provider name, with explicit forms for the providers we know about.
+// Unknown values fall back to a simple first-letter upper-case.
+func providerDisplay(provider string) string {
+	switch provider {
+	case "anthropic":
+		return "Anthropic"
+	case "openai":
+		return "OpenAI"
+	case "ollama":
+		return "Ollama"
+	case "gemini":
+		return "Gemini"
+	case "voyage":
+		return "Voyage"
+	}
+	if provider == "" {
+		return provider
+	}
+	return strings.ToUpper(provider[:1]) + provider[1:]
+}
+
 // logDebugTokens prints the same per-call debug line the old hand-rolled
 // clients printed; \r\n leads to clear an in-flight spinner line.
 func logDebugTokens(provider string, u llm.TokenUsage) {
-	pretty := strings.Title(provider) // best-effort capitalisation
+	pretty := providerDisplay(provider)
 	if u.CacheCreationInputTokens > 0 || u.CacheReadInputTokens > 0 {
 		percent := 0.0
 		total := u.PromptTokens + u.CacheReadInputTokens
