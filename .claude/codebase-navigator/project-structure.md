@@ -11,8 +11,7 @@ pgedge-nla/
 ├── .github/              # GitHub Actions workflows
 ├── cmd/                  # Entry points
 │   ├── pgedge-pg-mcp-svr/   # MCP server
-│   ├── pgedge-pg-mcp-cli/   # CLI client
-│   └── kb-builder/          # Knowledge base builder
+│   └── pgedge-pg-mcp-cli/   # CLI client
 ├── internal/             # Core packages (private)
 ├── web/                  # React web application (JavaScript/JSX)
 ├── docs/                 # Project documentation
@@ -30,10 +29,8 @@ Each binary has its own subdirectory under cmd/.
 cmd/
 ├── pgedge-pg-mcp-svr/
 │   └── main.go           # MCP server entry point
-├── pgedge-pg-mcp-cli/
-│   └── main.go           # CLI client entry point
-└── kb-builder/
-    └── main.go           # Knowledge base builder entry point
+└── pgedge-pg-mcp-cli/
+    └── main.go           # CLI client entry point
 ```
 
 ## Internal Packages (`/internal`)

@@ -9,7 +9,6 @@ bin/
 *.test
 /pgedge-postgres-mcp
 /pgedge-nla-cli
-/pgedge-nla-kb-builder
 /pgedge-pg-mcp-svr
 
 
@@ -49,6 +48,3 @@ site/
 
 # Knowledgebase database (for Docker builds)
 kb/kb.db
-
-# Build artifacts
-examples/pgedge-nla-kb-builder-build.yaml

@@ -476,21 +476,47 @@ echo "Configure Nginx: ln -s /etc/nginx/sites-available/pgedge-nla-web /etc/ngin
 
 ### 4. Knowledgebase Database Package (`pgedge-nla-kb`)
 
-**Build Commands:**
-```bash
-cd /path/to/pgedge-postgres-mcp
+The knowledgebase database is produced by the standalone
+[pgEdge AI Knowledgebase Builder](https://github.com/pgEdge/pgedge-ai-kb)
+project. The MCP server consumes `kb.db` at runtime; this package
+ships the pre-built file.
 
-# Build the kb-builder tool
-make build-kb-builder
+This package only ships the pre-built database file; obtain it
+either by building from source or by downloading a release artifact
+from the standalone project, then rename it to `kb.db` before
+packaging.
+
+**Option 1: Build from Source**
+
+```bash
+# Clone and build the kb-builder tool from the standalone project
+git clone https://github.com/pgEdge/pgedge-ai-kb.git
+cd pgedge-ai-kb
+make build
 
 # Generate the knowledgebase database
 # This requires valid API keys for embedding providers (OpenAI, Voyage, AND Ollama)
 # Note that Ollama may need to run on a g4dn.xlarge instance on AWS to keep up.
-# The example config below should be maintained with the standard list of repos.
-./bin/pgedge-nla-kb-builder -config examples/pgedge-nla-kb-builder.yaml
+# Maintain examples/pgedge-ai-kb-builder.yaml with the standard list of repos.
+./bin/pgedge-ai-kb-builder -c examples/pgedge-ai-kb-builder.yaml
 
-# The generated database will be: kb.db
+# The generated database is bin/pgedge-ai-kb.db.
+# Rename to kb.db before packaging.
+cp bin/pgedge-ai-kb.db /path/to/packaging/kb.db
 ```
+
+The `make kb` target in the standalone project chains the build and
+generate steps together.
+
+**Option 2: Download a Pre-Built Release**
+
+```bash
+# Download the latest release artifact (kb.db) from the standalone project.
+curl -L -o /path/to/packaging/kb.db \
+    https://github.com/pgEdge/pgedge-ai-kb/releases/download/<tag>/kb.db
+```
+
+The release artifact is already named `kb.db` and is ready to package.
 
 **Database Location:**
 ```
@@ -541,7 +567,8 @@ fi
 - Can be updated independently of other packages
 
 **DO NOT INCLUDE:**
-- kb-builder binary (this is a build-time tool only)
+- kb-builder binary (now lives in the separate
+  [pgedge-ai-kb](https://github.com/pgEdge/pgedge-ai-kb) project)
 - Source documentation files
 - Build configuration files
 - Temporary build artifacts

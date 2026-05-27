@@ -1,48 +1,100 @@
 # Configuring and Using Knowledgebase Search
 
 The `search_knowledgebase` tool provides semantic search over pre-built
-documentation databases, allowing you to search PostgreSQL documentation,
-pgEdge product documentation, and other technical resources.
+documentation databases, allowing you to search PostgreSQL
+documentation, pgEdge product documentation, and other technical
+resources.
 
-Unlike the `similarity_search` which searches your own data in PostgreSQL, the
-`search_knowledgebase` tool searches curated documentation that has been
-pre-processed and indexed for efficient semantic retrieval.
+Unlike the `similarity_search` tool, which searches your own data in
+PostgreSQL, the `search_knowledgebase` tool searches curated
+documentation that has been pre-processed and indexed for efficient
+semantic retrieval.
 
 Use `search_knowledgebase` when you need information about:
 
 - PostgreSQL features, syntax, and functions.
-- pgEdge products and capabilities.
-- Other documented technologies included in the Knowledgebase.
 
-Use `similarity_search` when you need to search your own data stored in
-PostgreSQL tables.
+- pgEdge products and capabilities.
+
+- Other documented technologies included in the knowledgebase.
+
+Use `similarity_search` when you need to search your own data stored
+in PostgreSQL tables.
 
 **Best Practices**
 
-* **Start broad**: Begin with general queries, then refine based on results.
-* **Use filters**: Add project/version filters when you know what you're
-   looking for.
+* **Start broad**: Begin with general queries, then refine based on
+  results.
+
+* **Use filters**: Add project/version filters when you know what
+  you're looking for.
+
 * **Check multiple results**: Review several results for comprehensive
-   information.
+  information.
+
 * **Combine with other tools**: Use with `query_database` to apply
-   documentation knowledge to actual queries.
+  documentation knowledge to actual queries.
 
 !!! Limitations
 
     - Results are limited to pre-built documentation.
-    - Database must be periodically rebuilt to include new documentation.
-    - Requires storage space for the knowledgebase database file.
+
+    - The database must be periodically rebuilt to include new
+      documentation.
+
+    - The server requires storage space for the knowledgebase
+      database file.
+
     - Search quality depends on embedding provider consistency.
 
 
-## Configuring Knowledgebase Search
+## Obtaining a Knowledgebase Database
 
-To enable Knowledgebase search, add the following code snippet to your server configuration:
+The MCP server consumes a pre-built `kb.db` file at runtime. The
+`kb.db` is produced by the standalone
+[pgEdge AI Knowledgebase Builder
+project](https://github.com/pgEdge/pgedge-ai-kb), which lives in its
+own repository.
+
+You can obtain a `kb.db` in two ways.
+
+### Option 1: Download a Pre-Built Release
+
+The pgEdge AI Knowledgebase Builder project publishes release
+artifacts that bundle a ready-to-use `kb.db`. The
+[latest release](https://github.com/pgEdge/pgedge-ai-kb/releases)
+includes the standard pgEdge knowledgebase covering PostgreSQL,
+pgEdge product documentation, and related tools.
+
+Download the file and place it where the server can read it:
+
+```bash
+curl -L -o kb.db \
+    https://github.com/pgEdge/pgedge-ai-kb/releases/download/<tag>/kb.db
+```
+
+### Option 2: Build Your Own
+
+Build a custom knowledgebase, including private or internal
+documentation, by running the `pgedge-ai-kb-builder` tool. The
+[pgEdge AI Knowledgebase Builder
+documentation](https://github.com/pgEdge/pgedge-ai-kb#readme)
+includes a Quick Start, the configuration file reference, and a guide
+to building from custom sources.
+
+The output file is a SQLite database that the MCP server consumes
+read-only at runtime.
+
+
+## Configuring the MCP Server
+
+To enable the knowledgebase, add the following code snippet to your
+server configuration:
 
 ```yaml
 knowledgebase:
     enabled: true
-    database_path: "./pgedge-nla-kb.db"
+    database_path: "./kb.db"
     embedding_provider: "voyage"  # or "openai", "ollama"
     embedding_model: "voyage-3"
 
@@ -60,31 +112,41 @@ knowledgebase:
     # embedding_openai_api_key: ""
 ```
 
-**IMPORTANT:** The Knowledgebase embedding configuration is **completely
-independent** from the `embedding` and `llm` sections. This allows you to:
+**IMPORTANT:** The knowledgebase embedding configuration is
+**completely independent** from the `embedding` and `llm` sections.
+This allows you to:
 
 - Use different embedding providers for semantic search vs. the
-    `generate_embeddings` tool
-- Use different API keys for Knowledgebase search
+  `generate_embeddings` tool.
+
+- Use different API keys for knowledgebase search.
+
 - Configure each section separately via environment variables
-    (`PGEDGE_KB_*` prefix for Knowledgebase)
+  (`PGEDGE_KB_*` prefix for knowledgebase).
 
 **Requirements:**
 
-- A pre-built Knowledgebase database file (`.db` file).
-- Embedding provider configured for Knowledgebase search.
-- Same embedding provider and model used to build the database.
+- A pre-built knowledgebase database file (`.db` file).
+
+- An embedding provider configured for knowledgebase search.
+
+- The same embedding provider and model used to build the database.
 
 **See also:**
 
-- [Server Configuration Example](../reference/config-examples/server.md) - Complete server configuration with Knowledgebase section.
-- [KB Builder Configuration](../reference/config-examples/kb-builder.md) - Building the
-    knowledgebase database.
+- [Server Configuration
+  Example](../reference/config-examples/server.md) covers the
+  complete server configuration with a knowledgebase section.
+
+- The [pgEdge AI Knowledgebase Builder
+  project](https://github.com/pgEdge/pgedge-ai-kb) documents how to
+  build a `kb.db`.
 
 
 ## Using the Tool
 
-The `search_knowledgebase` tool supports several search patterns to help you find relevant documentation.
+The `search_knowledgebase` tool supports several search patterns to
+help you find relevant documentation.
 
 ### Basic Search
 
@@ -98,7 +160,8 @@ Args:
 
 ### Performing a Filtered Search
 
-You can narrow your search results by filtering on project name or version.
+You can narrow your search results by filtering on project name or
+version.
 
 Search within a specific project:
 
@@ -146,18 +209,25 @@ Default is 5 results, maximum is 20.
 Results include:
 
 - **Text**: The relevant documentation chunk.
+
 - **Title**: Document title.
+
 - **Section**: Section heading within the document.
+
 - **Project**: Project name and version.
+
 - **Similarity**: Relevance score (0-1, higher is more relevant).
 
 ## Examples
 
-The following examples demonstrate common use cases for Knowledgebase search.
+The following examples demonstrate common use cases for knowledgebase
+search.
 
 ### Example 1: General Query
 
-In the following example, the `search_knowledgebase` tool uses a general query to find documentation about composite indexes in PostgreSQL.
+In the following example, the `search_knowledgebase` tool uses a
+general query to find documentation about composite indexes in
+PostgreSQL.
 
 ```
 Query: "How do I create a composite index in PostgreSQL?"
@@ -170,7 +240,8 @@ Results:
 
 ### Example 2: Version-Specific Query
 
-In the following example, the `search_knowledgebase` tool uses project and version filters to find documentation specific to PostgreSQL 17.
+In the following example, the `search_knowledgebase` tool uses project
+and version filters to find documentation specific to PostgreSQL 17.
 
 ```
 Query: "MERGE statement"
@@ -185,7 +256,9 @@ Results:
 
 ### Example 3: Product-Specific Query
 
-In the following example, the `search_knowledgebase` tool uses a project filter to find pgEdge-specific documentation about multi-master replication.
+In the following example, the `search_knowledgebase` tool uses a
+project filter to find pgEdge-specific documentation about
+multi-master replication.
 
 ```
 Query: "multi-master replication"
@@ -197,21 +270,15 @@ Results:
 - Conflict resolution
 ```
 
-## Building a Knowledgebase
-
-Knowledgebase databases are built using the `kb-builder` tool. This is an
-internal tool for project developers - contact your administrator if you need
-a custom Knowledgebase built.
-
-The standard Knowledgebase includes:
-
-- PostgreSQL official documentation (multiple versions).
-- pgEdge product documentation.
-- Related tools and extensions.
-
 ## See Also
 
-- [Server Configuration Example](../reference/config-examples/server.md) - Complete server configuration with a knowledgebase section.
-- [KB Builder Configuration](../reference/config-examples/kb-builder.md) - Building the
-    Knowledgebase database.
-- [Available Tools](../reference/tools.md) - Overview of all MCP tools.
+- [Server Configuration
+  Example](../reference/config-examples/server.md) covers the
+  complete server configuration with a knowledgebase section.
+
+- [Available Tools](../reference/tools.md) provides an overview of
+  all MCP tools.
+
+- The [pgEdge AI Knowledgebase Builder
+  project](https://github.com/pgEdge/pgedge-ai-kb) documents how to
+  build a custom `kb.db`.

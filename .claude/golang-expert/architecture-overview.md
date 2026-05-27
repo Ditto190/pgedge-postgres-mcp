@@ -24,7 +24,6 @@ structure:
 cmd/
 ├── pgedge-pg-mcp-svr/   # MCP server executable
 ├── pgedge-pg-mcp-cli/   # CLI client for natural language queries
-├── kb-builder/          # Knowledge base builder tool
 └── test-config/         # Configuration testing utility
 ```
 
@@ -44,13 +43,6 @@ internal/
 ├── database/       # Database connection management
 ├── definitions/    # Tool and resource definitions
 ├── embedding/      # Embedding providers (Ollama, OpenAI, Voyage)
-├── kbchunker/      # Knowledge base document chunking
-├── kbconfig/       # Knowledge base configuration
-├── kbconverter/    # Document format conversion
-├── kbdatabase/     # Knowledge base database operations
-├── kbembed/        # Knowledge base embedding
-├── kbsource/       # Knowledge base source handling
-├── kbtypes/        # Knowledge base type definitions
 ├── llmproxy/       # LLM proxy for web clients
 ├── logging/        # Logging infrastructure
 ├── mcp/            # MCP protocol implementation
@@ -83,11 +75,11 @@ The React/MUI web client is located in `/web/`.
 - Conversation management and history
 - Local or remote MCP server connection
 
-### KB Builder (`kb-builder`)
+### Knowledgebase
 
-- Parse and chunk documentation
-- Generate embeddings
-- Build searchable knowledge bases
+The MCP server consumes a pre-built `kb.db` file at runtime; the
+builder that produces this file lives in the standalone
+[`pgedge-ai-kb`](https://github.com/pgEdge/pgedge-ai-kb) project.
 
 ## Core Architectural Patterns
 

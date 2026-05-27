@@ -99,11 +99,13 @@ You can build your own image with a custom knowledgebase using the
 **From a local file:**
 
 ```bash
-# First, build or obtain your KB database
-./bin/pgedge-nla-kb-builder -c my-config.yaml
+# First, build or obtain your KB database using the standalone
+# pgEdge AI Knowledgebase Builder project. See
+# https://github.com/pgEdge/pgedge-ai-kb for installation and a
+# Quick Start.
 
 # Place the database in the kb/ directory
-cp pgedge-nla-kb.db kb/kb.db
+cp pgedge-ai-kb.db kb/kb.db
 
 # Build the image (automatically includes kb/kb.db if present)
 docker build -f Dockerfile.server -t mcp-server:custom-kb .

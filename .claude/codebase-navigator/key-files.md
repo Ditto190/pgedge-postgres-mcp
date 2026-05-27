@@ -9,7 +9,6 @@ codebase and their purposes.
 |------|---------|
 | `/cmd/pgedge-pg-mcp-svr/main.go` | MCP server entry point |
 | `/cmd/pgedge-pg-mcp-cli/main.go` | CLI client entry point |
-| `/cmd/kb-builder/main.go` | Knowledge base builder entry point |
 | `/web/src/main.jsx` | React application entry point |
 | `/web/src/App.jsx` | React root component |
 

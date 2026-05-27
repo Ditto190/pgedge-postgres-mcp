@@ -108,11 +108,9 @@ nav:
           - Server Configuration File: reference/config-examples/server.md
           - API Token Configuration File: reference/config-examples/tokens.md
           - CLI Client Configuration Details: reference/config-examples/cli-client.md
-          - KB Builder Configuration Details: reference/config-examples/kb-builder.md
   - Advanced Topics:
       - Creating Custom Definitions: advanced/custom-definitions.md
       - Configuring and Using Knowledgebase Search: advanced/knowledgebase.md
-      - Building a Custom Knowledge Base: advanced/custom-knowledgebase-tutorial.md
       - Using the LLM Proxy: advanced/llm-proxy.md
       - Row-Level and Column-Level Security: advanced/row-level-security.md
       - Distributed Deployment: advanced/distributed-deployment.md
@@ -130,7 +128,6 @@ nav:
       - Development Setup: contributing/development.md
       - Architecture: contributing/architecture.md
       - Internal Architecture: contributing/internal-architecture.md
-      - KB Builder: contributing/internal/kb-builder-architecture.md
       - Testing: contributing/testing.md
       - CI/CD: contributing/ci-cd.md
   - Accessing Online Help: guide/help.md

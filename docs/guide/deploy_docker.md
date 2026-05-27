@@ -216,7 +216,7 @@ services:
             - ./config/tokens.yaml:/app/postgres-mcp-tokens.yaml:ro
             - ./config/users.yaml:/app/postgres-mcp-users.yaml:ro
             # Mount knowledgebase database (optional)
-            - ./data/kb.db:/app/pgedge-nla-kb.db:ro
+            - ./data/kb.db:/app/kb.db:ro
         healthcheck:
             test: ["CMD", "wget", "--spider", "-q",
                    "http://localhost:8080/health"]
@@ -320,7 +320,7 @@ MCP_CLIENT_TOKEN=
 # KNOWLEDGEBASE CONFIGURATION (Optional)
 # ============================================================
 # PGEDGE_KB_ENABLED=true
-# PGEDGE_KB_DATABASE_PATH=/app/pgedge-nla-kb.db
+# PGEDGE_KB_DATABASE_PATH=/app/kb.db
 # PGEDGE_KB_EMBEDDING_PROVIDER=voyage
 # PGEDGE_KB_EMBEDDING_MODEL=voyage-3
 # PGEDGE_KB_VOYAGE_API_KEY=your-voyage-key

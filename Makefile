@@ -1,13 +1,11 @@
-.PHONY: build build-server build-client build-kb-builder clean clean-server clean-client clean-kb-builder test test-server test-client test-kb-builder run install help lint lint-server lint-client fmt format gofmt kb openapi
+.PHONY: build build-server build-client clean clean-server clean-client test test-server test-client run install help lint lint-server lint-client fmt format gofmt openapi
 
 # Binary names and directories
 SERVER_BINARY=pgedge-postgres-mcp
 CLIENT_BINARY=pgedge-nla-cli
-KB_BUILDER_BINARY=pgedge-nla-kb-builder
 BIN_DIR=bin
 SERVER_CMD_DIR=cmd/pgedge-pg-mcp-svr
 CLIENT_CMD_DIR=cmd/pgedge-pg-mcp-cli
-KB_BUILDER_CMD_DIR=cmd/kb-builder
 
 # Build variables
 GO=go
@@ -16,8 +14,8 @@ GOFLAGS=-v
 # Default target - build all binaries
 all: build
 
-# Build all binaries (server, client, and kb-builder)
-build: build-server build-client build-kb-builder
+# Build all binaries (server and client)
+build: build-server build-client
 
 # Build the server binary
 build-server: server
@@ -34,20 +32,6 @@ client:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build $(GOFLAGS) -o $(BIN_DIR)/$(CLIENT_BINARY) ./$(CLIENT_CMD_DIR)
 	@echo "Client build complete: $(BIN_DIR)/$(CLIENT_BINARY)"
-
-# Build the kb-builder binary
-build-kb-builder: kb-builder
-kb-builder:
-	@echo "Building $(KB_BUILDER_BINARY)..."
-	@mkdir -p $(BIN_DIR)
-	$(GO) build $(GOFLAGS) -o $(BIN_DIR)/$(KB_BUILDER_BINARY) ./$(KB_BUILDER_CMD_DIR)
-	@echo "KB-builder build complete: $(BIN_DIR)/$(KB_BUILDER_BINARY)"
-
-# Build/update the knowledgebase database
-kb: kb-builder
-	@echo "Building knowledgebase database..."
-	$(BIN_DIR)/$(KB_BUILDER_BINARY) -c examples/pgedge-nla-kb-builder.yaml
-	@echo "Knowledgebase build complete: $(BIN_DIR)/pgedge-nla-kb.db"
 
 # Regenerate the static OpenAPI specification from the programmatic builder
 openapi:
@@ -78,7 +62,7 @@ build-windows:
 	@echo "Windows build complete: $(BIN_DIR)/$(SERVER_BINARY)-windows-amd64.exe"
 
 # Clean all build artifacts
-clean: clean-server clean-client clean-kb-builder
+clean: clean-server clean-client
 	@echo "All clean complete"
 
 # Clean server artifacts
@@ -99,14 +83,8 @@ clean-client:
 	rm -f $(BIN_DIR)/$(CLIENT_BINARY)-windows-*
 	@echo "Client clean complete"
 
-# Clean kb-builder artifacts
-clean-kb-builder:
-	@echo "Cleaning kb-builder artifacts..."
-	rm -f $(BIN_DIR)/$(KB_BUILDER_BINARY)
-	@echo "KB-builder clean complete"
-
 # Run all tests
-test: test-server test-client test-kb-builder
+test: test-server test-client
 
 # Run server tests
 test-server:
@@ -117,11 +95,6 @@ test-server:
 test-client:
 	@echo "Running client tests..."
 	$(GO) test -v ./internal/chat/... ./$(CLIENT_CMD_DIR)/...
-
-# Run kb-builder tests
-test-kb-builder:
-	@echo "Running kb-builder tests..."
-	$(GO) test -v ./internal/kbconfig/... ./internal/kbsource/... ./internal/kbconverter/... ./internal/kbchunker/... ./internal/kbembed/... ./internal/kbdatabase/... ./$(KB_BUILDER_CMD_DIR)/...
 
 # Run with example environment
 run:
@@ -208,24 +181,21 @@ help:
 	@echo "pgEdge Postgres MCP - Makefile commands:"
 	@echo ""
 	@echo "Building:"
-	@echo "  make                - Build all binaries (server, client, kb-builder) (default)"
-	@echo "  make build          - Build all binaries (server, client, kb-builder)"
+	@echo "  make                - Build all binaries (server, client) (default)"
+	@echo "  make build          - Build all binaries (server, client)"
 	@echo "  make server         - Build the MCP server"
 	@echo "  make client         - Build the chat client"
-	@echo "  make kb-builder     - Build the knowledgebase builder"
 	@echo "  make build-server   - Build the MCP server (alias)"
 	@echo "  make build-client   - Build the chat client (alias)"
-	@echo "  make build-kb-builder - Build the knowledgebase builder (alias)"
 	@echo "  make build-all      - Build for all platforms"
 	@echo "  make build-linux    - Build for Linux (amd64)"
 	@echo "  make build-darwin   - Build for macOS (amd64 and arm64)"
 	@echo "  make build-windows  - Build for Windows (amd64)"
 	@echo ""
 	@echo "Testing:"
-	@echo "  make test           - Run all tests (server + client + kb-builder)"
+	@echo "  make test           - Run all tests (server + client)"
 	@echo "  make test-server    - Run server tests only"
 	@echo "  make test-client    - Run client tests only"
-	@echo "  make test-kb-builder - Run kb-builder tests only"
 	@echo ""
 	@echo "Formatting:"
 	@echo "  make fmt            - Format Go code with go fmt"
@@ -241,10 +211,6 @@ help:
 	@echo "  make clean          - Remove all build artifacts"
 	@echo "  make clean-server   - Remove server artifacts only"
 	@echo "  make clean-client   - Remove client artifacts only"
-	@echo "  make clean-kb-builder - Remove kb-builder artifacts only"
-	@echo ""
-	@echo "Knowledgebase:"
-	@echo "  make kb             - Build/update the knowledgebase database in bin/"
 	@echo ""
 	@echo "OpenAPI:"
 	@echo "  make openapi        - Regenerate docs/api/openapi.json from source"
@@ -255,3 +221,6 @@ help:
 	@echo "  make install        - Install both binaries to GOPATH/bin"
 	@echo "  make help           - Show this help message"
 	@echo ""
+	@echo "Knowledgebase:"
+	@echo "  The kb-builder tool that produces kb.db is now in its own"
+	@echo "  project: https://github.com/pgEdge/pgedge-ai-kb"

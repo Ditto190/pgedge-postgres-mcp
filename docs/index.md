@@ -64,7 +64,6 @@ Reference Pages:
 - [Configuration Reference - Server](reference/config-examples/server.md)
 - [Configuration Reference - API Token](reference/config-examples/tokens.md)
 - [CLI Client Configuration](reference/config-examples/cli-client.md)
-- [KB Builder Configuration](reference/config-examples/kb-builder.md)
 
 For Developers building applications that use the MCP server:
 

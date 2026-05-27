@@ -139,8 +139,7 @@ This documentation serves as a knowledge base for understanding, maintaining, an
 /
 ├── cmd/
 │   ├── pgedge-pg-mcp-svr/        # MCP server entry point
-│   ├── pgedge-pg-mcp-cli/        # CLI client entry point
-│   └── kb-builder/               # Knowledge base builder
+│   └── pgedge-pg-mcp-cli/        # CLI client entry point
 ├── internal/
 │   ├── mcp/
 │   │   ├── types.go              # Protocol types and constructors

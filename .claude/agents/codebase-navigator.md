@@ -43,7 +43,6 @@ The pgEdge Postgres MCP Server follows Go standard layout:
 ### /cmd (Go entry points)
 - `/cmd/pgedge-pg-mcp-svr/` - MCP server entry point
 - `/cmd/pgedge-pg-mcp-cli/` - CLI client entry point
-- `/cmd/kb-builder/` - Knowledge base builder entry point
 
 ### /internal (Go packages)
 - Core implementation packages (private)

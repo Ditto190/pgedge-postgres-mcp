@@ -8,12 +8,6 @@ before:
     hooks:
         # Format code
         - go fmt ./...
-        # Build kb-builder for generating kb.db
-        - sh -c 'CGO_ENABLED=0 go build -o pgedge-nla-kb-builder ./cmd/kb-builder'
-        # Create bin directory for kb.db output
-        - mkdir -p bin
-        # Generate kb.db using Ollama Cloud (requires OLLAMA_API_KEY env var)
-        - ./pgedge-nla-kb-builder --config examples/pgedge-nla-kb-builder-build.yaml --max-retries 50
 
 builds:
     # MCP Server - arm64 (all platforms)
@@ -52,24 +46,6 @@ builds:
           - -X main.date={{.Date}}
           - -X main.builtBy=goreleaser
 
-    # KB Builder - arm64 (all platforms, pure Go)
-    - id: pgedge-nla-kb-builder-arm64
-      binary: pgedge-nla-kb-builder
-      main: ./cmd/kb-builder
-      env:
-          - CGO_ENABLED=0
-      goos:
-          - linux
-          - darwin
-      goarch:
-          - arm64
-      ldflags:
-          - -s -w
-          - -X main.version={{.Version}}
-          - -X main.commit={{.Commit}}
-          - -X main.date={{.Date}}
-          - -X main.builtBy=goreleaser
-
 archives:
     # Server archive - arm64 only
     - id: server-arm64
@@ -92,19 +68,6 @@ archives:
           - README.md
           - LICENSE.md
           - docs/**/*
-
-    # KB Builder archive for ARM64
-    - id: kb-builder-arm64
-      builds:
-          - pgedge-nla-kb-builder-arm64
-      name_template: "{{ .ProjectName }}-kb-builder_{{ .Version }}_{{ .Os }}_arm64"
-      allow_different_binary_count: true
-      files:
-          - README.md
-          - LICENSE.md
-          - examples/pgedge-nla-kb-builder.yaml
-          - kb/README.md
-          - bin/kb.db
 
 snapshot:
     version_template: "{{ incpatch .Version }}-next"

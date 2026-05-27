@@ -380,7 +380,7 @@ knowledgebase:
 
     # Path to knowledgebase SQLite database
     # Default: ""
-    database_path: "./pgedge-nla-kb.db"
+    database_path: "./kb.db"
 
     # Embedding provider for knowledgebase similarity search
     # IMPORTANT: This is INDEPENDENT from the embedding.provider setting above.

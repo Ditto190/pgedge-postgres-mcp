@@ -615,8 +615,10 @@ and other documented technologies.
 !!! note
 
     * The knowledgebase must be enabled in the server configuration.
-    * A knowledgebase database must be built using the `kb-builder`
-      tool.
+    * The knowledgebase database (`kb.db`) is produced by the
+      standalone
+      [pgEdge AI Knowledgebase Builder](https://github.com/pgEdge/pgedge-ai-kb)
+      project; download a pre-built release or build your own.
 
     See [Knowledgebase Configuration](../advanced/knowledgebase.md) for
     details.

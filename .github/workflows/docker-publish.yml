@@ -111,12 +111,15 @@ jobs:
               env:
                   KB_SOURCE_INPUT: ${{ github.event.inputs.kb_source }}
               run: |
-                  # Use input if provided, otherwise use default URL
+                  # Use input if provided, otherwise use default URL.
+                  # The kb.db is produced by the standalone kb-builder project
+                  # at https://github.com/pgEdge/pgedge-ai-kb. Release artifacts
+                  # follow the kb-YYYY-MM-DD tagging convention; "kb-latest"
+                  # is expected to alias the most recent stable build.
                   if [ -n "$KB_SOURCE_INPUT" ]; then
                       echo "url=$KB_SOURCE_INPUT" >> $GITHUB_OUTPUT
                   else
-                      # Default KB source URL (update this when KB is hosted)
-                      echo "url=https://github.com/pgEdge/pgedge-postgres-mcp/releases/download/kb-latest/kb.db" >> $GITHUB_OUTPUT
+                      echo "url=https://github.com/pgEdge/pgedge-ai-kb/releases/download/kb-latest/kb.db" >> $GITHUB_OUTPUT
                   fi
 
             - name: Check if KB source is available
@@ -131,6 +134,10 @@ jobs:
                       echo "KB source is available"
                   else
                       echo "available=false" >> $GITHUB_OUTPUT
+                      if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+                          echo "::error::KB source is unavailable for tag release: $KB_URL"
+                          exit 1
+                      fi
                       echo "KB source is NOT available - skipping with-kb build"
                   fi
 

@@ -9,6 +9,20 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- The KB Builder (formerly `cmd/kb-builder` and the
+  `internal/kb*` packages) has moved to a standalone project at
+  [`pgedge-ai-kb`](https://github.com/pgEdge/pgedge-ai-kb). The
+  binary is renamed from `pgedge-nla-kb-builder` to
+  `pgedge-ai-kb-builder`. The MCP server itself is unaffected; it
+  continues to consume a pre-built `kb.db` at runtime. The Docker
+  build now downloads `kb.db` from
+  `https://github.com/pgEdge/pgedge-ai-kb/releases/download/kb-latest/kb.db`
+  by default; pass `KB_SOURCE` to override. The
+  `pgedge-nla-kb-builder_*` release archives are no longer published
+  from this repository.
+
 ### Fixed
 
 - Metadata loader now tolerates tables with zero columns

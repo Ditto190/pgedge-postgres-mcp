@@ -7,7 +7,7 @@ the Postgres MCP Server project.
 
 The Postgres MCP Server consists of:
 
-- **/cmd/**: Entry points (MCP server, CLI, KB builder)
+- **/cmd/**: Entry points (MCP server, CLI)
 - **/internal/**: Core packages (mcp, auth, database, tools, resources)
 - **/web/**: React-based web application (not yet implemented)
 
@@ -19,8 +19,7 @@ The Postgres MCP Server consists of:
 pgedge-nla/
 ├── cmd/
 │   ├── pgedge-pg-mcp-svr/      # MCP server entry point
-│   ├── pgedge-pg-mcp-cli/      # CLI client entry point
-│   └── kb-builder/             # Knowledge base builder
+│   └── pgedge-pg-mcp-cli/      # CLI client entry point
 │
 ├── internal/
 │   ├── *_test.go               # Unit tests co-located with source

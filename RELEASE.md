@@ -49,16 +49,13 @@ Platform-independent archive containing:
 This is a `noarch` package as it contains only static HTML/CSS/JS
 files.
 
-### 4. KB Builder (`pgedge-nla-kb-builder_*`)
+### 4. KB Builder
 
-- Linux: amd64, arm64
-- macOS: amd64, arm64
-
-Architecture-specific archives containing:
-
-- `pgedge-nla-kb-builder` binary (CGO enabled for SQLite)
-- Example configuration
-- KB source files
+The KB Builder is no longer released from this repository. It now lives
+in the standalone
+[pgEdge AI Knowledgebase Builder](https://github.com/pgEdge/pgedge-ai-kb)
+project; releases there publish the `pgedge-ai-kb-builder` binary and
+the `kb.db` database the MCP server consumes.
 
 ## Testing Locally
 
@@ -170,7 +167,7 @@ The `.github/workflows/release.yml` workflow:
 
 The `.goreleaser.yaml` configuration:
 
-- **Builds**: Three separate binaries (server, CLI, kb-builder)
+- **Builds**: Two separate binaries (server, CLI)
 - **Archives**: Platform-specific tarballs/zips
 - **Checksums**: SHA256 for all artifacts
 - **Changelog**: Auto-generated from conventional commits
@@ -229,14 +226,6 @@ goreleaser check
 - Verify `.goreleaser.yaml` includes all necessary files
 - Check that Web UI `dist/` directory exists
 - Ensure example configs are present
-
-### CGO Issues (KB Builder)
-
-The kb-builder requires CGO for SQLite:
-
-- Linux: Uses system gcc
-- macOS: Uses Xcode command-line tools
-- Cross-compilation may require additional setup
 
 ## Manual Release (Fallback)
 
