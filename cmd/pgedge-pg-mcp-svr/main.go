@@ -903,17 +903,20 @@ func main() {
 					}
 				}
 
-				if len(providers) > 0 {
-					p := proxy.New(proxy.Config{
-						DefaultProvider: cfg.LLM.Provider,
-						Providers:       providers,
-						OnRequest:       llmtracing.OnRequest,
-						OnResponse:      llmtracing.OnResponse,
-						OnError:         llmtracing.OnError,
-					})
-					mux.Handle("/api/llm/",
-						authWrapper(http.StripPrefix("/api/llm", p.Handler()).ServeHTTP))
+				if len(providers) == 0 {
+					return fmt.Errorf("LLM is enabled but no provider is configured; " +
+						"set at least one of anthropic_api_key, openai_api_key, or ollama_url")
 				}
+
+				p := proxy.New(proxy.Config{
+					DefaultProvider: cfg.LLM.Provider,
+					Providers:       providers,
+					OnRequest:       llmtracing.OnRequest,
+					OnResponse:      llmtracing.OnResponse,
+					OnError:         llmtracing.OnError,
+				})
+				mux.Handle("/api/llm/",
+					authWrapper(http.StripPrefix("/api/llm", p.Handler()).ServeHTTP))
 			}
 
 			// Database listing and selection endpoints

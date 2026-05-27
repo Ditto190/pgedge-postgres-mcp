@@ -281,7 +281,7 @@ func buildLLMProvidersPath() M {
 		"get": M{
 			"tags":        A{"LLM Proxy"},
 			"summary":     "List LLM providers",
-			"description": "Returns the available LLM providers and the default model.",
+			"description": "Returns the configured LLM providers (with each provider's default model) and the overall default provider name.",
 			"operationId": "listLLMProviders",
 			"security":    bearerSecurity(),
 			"responses": mergeResponses(M{
@@ -1035,7 +1035,7 @@ func schemaProviderInfo() M {
 				"description": "Whether this provider is the default.",
 			},
 		},
-		"required": A{"name"},
+		"required": A{"name", "model", "default"},
 	}
 }
 
@@ -1054,7 +1054,7 @@ func schemaProvidersResponse() M {
 				"description": "The name of the default provider.",
 			},
 		},
-		"required": A{"providers"},
+		"required": A{"providers", "default_provider"},
 	}
 }
 
