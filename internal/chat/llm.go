@@ -18,7 +18,6 @@ import (
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 	"github.com/pgEdge/pgedge-go-llm-lib/llm/provider/anthropic"
-	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/anthropic"
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/ollama"
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/openai"
 
