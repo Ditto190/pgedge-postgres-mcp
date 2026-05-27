@@ -9,7 +9,26 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Each built-in tool, resource, and prompt can now be enabled or
+  disabled via an environment variable in addition to the
+  `builtins` section of the configuration file. The variables are
+  `PGEDGE_BUILTIN_TOOL_*`, `PGEDGE_BUILTIN_RESOURCE_*`, and
+  `PGEDGE_BUILTIN_PROMPT_*`; see the configuration reference for
+  the complete list. This is useful in containerized deployments
+  where editing the configuration file is awkward. (#139)
+
 ### Changed
+
+- The built-in `pg://system_info` resource now uses the machine-safe
+  name `postgresql_system_info` (previously
+  `"PostgreSQL System Information"`). The new name matches the
+  identifier pattern enforced by Anthropic's tool-name validation
+  (`^[a-zA-Z0-9_-]{1,128}$`), so the resource no longer breaks
+  interoperability when a downstream MCP client forwards built-in
+  capability names as provider tool names. The resource URI is
+  unchanged. (#139)
 
 - The KB Builder (formerly `cmd/kb-builder` and the
   `internal/kb*` packages) has moved to a standalone project at

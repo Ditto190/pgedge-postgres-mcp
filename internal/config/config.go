@@ -882,6 +882,20 @@ func setBoolFromEnv(dest *bool, key string) {
 	}
 }
 
+// setBoolPtrFromEnv sets a *bool config value from an environment variable if it exists.
+// Pointer-valued booleans distinguish "explicitly set" from "use default", so we only
+// allocate a new bool when the env var is present.
+// Accepts "true", "1", or "yes" (case-insensitive) as true values; everything else is false.
+func setBoolPtrFromEnv(dest **bool, key string) {
+	val := os.Getenv(key)
+	if val == "" {
+		return
+	}
+	lower := strings.ToLower(val)
+	b := lower == "true" || lower == "1" || lower == "yes"
+	*dest = &b
+}
+
 // setIntFromEnv sets an integer config value from an environment variable if it exists
 func setIntFromEnv(dest *int, key string) {
 	if val := os.Getenv(key); val != "" {
@@ -1079,8 +1093,24 @@ func applyEnvironmentVariables(cfg *Config) {
 	// Trace file
 	setStringFromEnv(&cfg.TraceFile, "PGEDGE_TRACE_FILE")
 
-	// Note: Builtins (tools, resources, prompts) are only configurable via
-	// config file, not environment variables
+	// Built-in tools, resources, and prompts.
+	// Useful for containerized deployments where editing the config file is awkward.
+	// Tools
+	setBoolPtrFromEnv(&cfg.Builtins.Tools.QueryDatabase, "PGEDGE_BUILTIN_TOOL_QUERY_DATABASE")
+	setBoolPtrFromEnv(&cfg.Builtins.Tools.GetSchemaInfo, "PGEDGE_BUILTIN_TOOL_GET_SCHEMA_INFO")
+	setBoolPtrFromEnv(&cfg.Builtins.Tools.SimilaritySearch, "PGEDGE_BUILTIN_TOOL_SIMILARITY_SEARCH")
+	setBoolPtrFromEnv(&cfg.Builtins.Tools.ExecuteExplain, "PGEDGE_BUILTIN_TOOL_EXECUTE_EXPLAIN")
+	setBoolPtrFromEnv(&cfg.Builtins.Tools.GenerateEmbedding, "PGEDGE_BUILTIN_TOOL_GENERATE_EMBEDDING")
+	setBoolPtrFromEnv(&cfg.Builtins.Tools.SearchKnowledgebase, "PGEDGE_BUILTIN_TOOL_SEARCH_KNOWLEDGEBASE")
+	setBoolPtrFromEnv(&cfg.Builtins.Tools.CountRows, "PGEDGE_BUILTIN_TOOL_COUNT_ROWS")
+	setBoolPtrFromEnv(&cfg.Builtins.Tools.LLMConnectionSelection, "PGEDGE_BUILTIN_TOOL_LLM_CONNECTION_SELECTION")
+	// Resources
+	setBoolPtrFromEnv(&cfg.Builtins.Resources.SystemInfo, "PGEDGE_BUILTIN_RESOURCE_SYSTEM_INFO")
+	// Prompts
+	setBoolPtrFromEnv(&cfg.Builtins.Prompts.ExploreDatabase, "PGEDGE_BUILTIN_PROMPT_EXPLORE_DATABASE")
+	setBoolPtrFromEnv(&cfg.Builtins.Prompts.SetupSemanticSearch, "PGEDGE_BUILTIN_PROMPT_SETUP_SEMANTIC_SEARCH")
+	setBoolPtrFromEnv(&cfg.Builtins.Prompts.DiagnoseQueryIssue, "PGEDGE_BUILTIN_PROMPT_DIAGNOSE_QUERY_ISSUE")
+	setBoolPtrFromEnv(&cfg.Builtins.Prompts.DesignSchema, "PGEDGE_BUILTIN_PROMPT_DESIGN_SCHEMA")
 }
 
 // applyCLIFlags overrides config with CLI flags if they were explicitly set

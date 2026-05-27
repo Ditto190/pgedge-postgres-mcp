@@ -25,7 +25,7 @@ func PGSystemInfoResource(dbClient *database.Client) Resource {
 	return Resource{
 		Definition: mcp.Resource{
 			URI:  URISystemInfo,
-			Name: "PostgreSQL System Information",
+			Name: "postgresql_system_info",
 			Description: `PostgreSQL server metadata: version, OS, architecture, connection details.
 
 <usecase>

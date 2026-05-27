@@ -813,6 +813,117 @@ func TestSetBoolFromEnv(t *testing.T) {
 	os.Unsetenv("TEST_BOOL_VAR")
 }
 
+func TestSetBoolPtrFromEnv(t *testing.T) {
+	const key = "TEST_BOOL_PTR_VAR"
+
+	t.Run("unset leaves nil pointer", func(t *testing.T) {
+		os.Unsetenv(key)
+		var dest *bool
+		setBoolPtrFromEnv(&dest, key)
+		if dest != nil {
+			t.Errorf("expected dest to remain nil when env var unset, got %v", *dest)
+		}
+	})
+
+	truthy := []string{"true", "TRUE", "True", "1", "yes", "YES"}
+	for _, v := range truthy {
+		t.Run("truthy_"+v, func(t *testing.T) {
+			os.Setenv(key, v)
+			defer os.Unsetenv(key)
+			var dest *bool
+			setBoolPtrFromEnv(&dest, key)
+			if dest == nil {
+				t.Fatalf("expected non-nil pointer for value %q", v)
+			}
+			if !*dest {
+				t.Errorf("expected true for value %q, got false", v)
+			}
+		})
+	}
+
+	falsy := []string{"false", "0", "no", "anything-else"}
+	for _, v := range falsy {
+		t.Run("falsy_"+v, func(t *testing.T) {
+			os.Setenv(key, v)
+			defer os.Unsetenv(key)
+			var dest *bool
+			setBoolPtrFromEnv(&dest, key)
+			if dest == nil {
+				t.Fatalf("expected non-nil pointer for value %q", v)
+			}
+			if *dest {
+				t.Errorf("expected false for value %q, got true", v)
+			}
+		})
+	}
+
+	t.Run("overrides existing pointer", func(t *testing.T) {
+		os.Setenv(key, "false")
+		defer os.Unsetenv(key)
+		existing := true
+		dest := &existing
+		setBoolPtrFromEnv(&dest, key)
+		if dest == nil {
+			t.Fatal("expected non-nil pointer")
+		}
+		if *dest {
+			t.Errorf("expected false (override), got true")
+		}
+	})
+}
+
+func TestApplyEnvironmentVariables_Builtins(t *testing.T) {
+	envVars := []string{
+		"PGEDGE_BUILTIN_TOOL_QUERY_DATABASE",
+		"PGEDGE_BUILTIN_TOOL_GET_SCHEMA_INFO",
+		"PGEDGE_BUILTIN_TOOL_SIMILARITY_SEARCH",
+		"PGEDGE_BUILTIN_TOOL_EXECUTE_EXPLAIN",
+		"PGEDGE_BUILTIN_TOOL_GENERATE_EMBEDDING",
+		"PGEDGE_BUILTIN_TOOL_SEARCH_KNOWLEDGEBASE",
+		"PGEDGE_BUILTIN_TOOL_COUNT_ROWS",
+		"PGEDGE_BUILTIN_TOOL_LLM_CONNECTION_SELECTION",
+		"PGEDGE_BUILTIN_RESOURCE_SYSTEM_INFO",
+		"PGEDGE_BUILTIN_PROMPT_EXPLORE_DATABASE",
+		"PGEDGE_BUILTIN_PROMPT_SETUP_SEMANTIC_SEARCH",
+		"PGEDGE_BUILTIN_PROMPT_DIAGNOSE_QUERY_ISSUE",
+		"PGEDGE_BUILTIN_PROMPT_DESIGN_SCHEMA",
+	}
+	for _, k := range envVars {
+		t.Setenv(k, "false")
+	}
+
+	cfg := defaultConfig()
+	applyEnvironmentVariables(cfg)
+
+	checks := []struct {
+		name string
+		ptr  *bool
+	}{
+		{"QueryDatabase", cfg.Builtins.Tools.QueryDatabase},
+		{"GetSchemaInfo", cfg.Builtins.Tools.GetSchemaInfo},
+		{"SimilaritySearch", cfg.Builtins.Tools.SimilaritySearch},
+		{"ExecuteExplain", cfg.Builtins.Tools.ExecuteExplain},
+		{"GenerateEmbedding", cfg.Builtins.Tools.GenerateEmbedding},
+		{"SearchKnowledgebase", cfg.Builtins.Tools.SearchKnowledgebase},
+		{"CountRows", cfg.Builtins.Tools.CountRows},
+		{"LLMConnectionSelection", cfg.Builtins.Tools.LLMConnectionSelection},
+		{"SystemInfo", cfg.Builtins.Resources.SystemInfo},
+		{"ExploreDatabase", cfg.Builtins.Prompts.ExploreDatabase},
+		{"SetupSemanticSearch", cfg.Builtins.Prompts.SetupSemanticSearch},
+		{"DiagnoseQueryIssue", cfg.Builtins.Prompts.DiagnoseQueryIssue},
+		{"DesignSchema", cfg.Builtins.Prompts.DesignSchema},
+	}
+	for _, c := range checks {
+		if c.ptr == nil {
+			t.Errorf("%s: expected non-nil pointer after env var override", c.name)
+			continue
+		}
+		if *c.ptr {
+			t.Errorf("%s: expected false after env var override, got true", c.name)
+		}
+	}
+}
+
 func TestParseHostEntries(t *testing.T) {
 	tests := []struct {
 		name    string
