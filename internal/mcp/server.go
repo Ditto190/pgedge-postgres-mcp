@@ -110,14 +110,25 @@ func (s *Server) Run() error {
 	scanner.Buffer(make([]byte, 0, ScannerInitialBufferSize), ScannerMaxBufferSize)
 
 	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
+		line := scanner.Bytes()
+		if len(line) == 0 {
 			continue
 		}
 
 		var req JSONRPCRequest
-		if err := json.Unmarshal([]byte(line), &req); err != nil {
+		if err := json.Unmarshal(line, &req); err != nil {
 			sendError(nil, -32700, "Parse error", err.Error())
+			continue
+		}
+
+		// Per JSON-RPC 2.0 §4.1, a Notification is a Request object
+		// without an "id" member, and the server MUST NOT reply. Note
+		// that "id": null is a valid request id and is NOT a
+		// notification, so we must inspect the raw JSON — interface{}
+		// unmarshaling collapses "absent" and "null" to the same nil
+		// value. This mirrors the HTTP transport's handling in
+		// handleHTTPRequest so the two transports behave identically.
+		if !hasIDField(line) {
 			continue
 		}
 
@@ -131,14 +142,18 @@ func (s *Server) Run() error {
 	return nil
 }
 
+// handleRequest dispatches a JSON-RPC request to the appropriate handler.
+//
+// Notifications (requests without an "id" member, per JSON-RPC 2.0 §4.1)
+// are filtered out by Run before reaching this function, so every dispatch
+// path here corresponds to a request that requires a response — including
+// requests whose id is explicitly null.
 func (s *Server) handleRequest(req JSONRPCRequest) {
 	switch req.Method {
 	case "initialize":
 		s.handleInitialize(req)
 	case "ping":
 		s.handlePing(req)
-	case "notifications/initialized":
-		// Client notification - no response needed
 	case "tools/list":
 		s.handleToolsList(req)
 	case "tools/call":
@@ -156,9 +171,7 @@ func (s *Server) handleRequest(req JSONRPCRequest) {
 	case "pgedge/selectDatabase":
 		s.handleSelectDatabase(req)
 	default:
-		if req.ID != nil {
-			sendError(req.ID, -32601, "Method not found", nil)
-		}
+		sendError(req.ID, -32601, "Method not found", nil)
 	}
 }
 
@@ -208,9 +221,9 @@ func (s *Server) handleInitialize(req JSONRPCRequest) {
 }
 
 func (s *Server) handlePing(req JSONRPCRequest) {
-	if req.ID == nil {
-		return
-	}
+	// Notifications are filtered out by Run before reaching dispatch, so
+	// every ping that arrives here is a request requiring a response —
+	// including one whose id is explicitly null.
 	sendResponse(req.ID, map[string]interface{}{})
 }
 

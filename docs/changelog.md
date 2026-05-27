@@ -44,6 +44,17 @@ and this project adheres to
   are now also acknowledged silently rather than receiving a `-32601`
   error reply. (#142)
 
+- Stdio transport now correctly distinguishes JSON-RPC notifications
+  (no `id` member) from requests with an explicit `"id": null` (per
+  JSON-RPC 2.0 §4.1). A request with `"id": null` targeting an unknown
+  method previously matched the same `req.ID == nil` guard used to
+  suppress notification replies and was silently dropped; it now
+  receives the required `-32601 Method not found` response. The
+  hardcoded `notifications/initialized` case was likewise affected and
+  is now filtered uniformly with all other notifications at the read
+  loop, using the same `hasIDField` raw-bytes probe introduced for the
+  HTTP transport in #142. (#152)
+
 - Database switching via `select_database_connection` now persists
   correctly in HTTP mode for unbound API tokens.
   `GetAccessibleDatabases` previously returned only the first
