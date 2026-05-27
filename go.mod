@@ -1,6 +1,6 @@
 module pgedge-postgres-mcp
 
-go 1.25.8
+go 1.26.1
 
 require (
 	github.com/charmbracelet/glamour v0.10.0
@@ -38,6 +38,7 @@ require (
 	github.com/muesli/reflow v0.3.0 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
+	github.com/pgEdge/pgedge-go-llm-lib v0.0.0-20260527091055-23f6ef29ba95 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
