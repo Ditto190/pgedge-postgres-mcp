@@ -446,7 +446,7 @@ type EmbeddingConfig struct {
 // LLMConfig holds LLM configuration for web client chat proxy
 type LLMConfig struct {
 	Enabled             bool    `yaml:"enabled"`                // Whether LLM proxy is enabled (default: false)
-	Provider            string  `yaml:"provider"`               // "anthropic", "openai", or "ollama"
+	Provider            string  `yaml:"provider"`               // "anthropic", "openai", "ollama", or "gemini"
 	Model               string  `yaml:"model"`                  // Provider-specific model name
 	AnthropicAPIKey     string  `yaml:"anthropic_api_key"`      // API key for Anthropic (direct - discouraged, use api_key_file or env var instead)
 	AnthropicAPIKeyFile string  `yaml:"anthropic_api_key_file"` // Path to file containing Anthropic API key
@@ -455,6 +455,8 @@ type LLMConfig struct {
 	OpenAIAPIKeyFile    string  `yaml:"openai_api_key_file"`    // Path to file containing OpenAI API key
 	OpenAIBaseURL       string  `yaml:"openai_base_url"`        // Base URL for OpenAI API (default: https://api.openai.com)
 	OllamaURL           string  `yaml:"ollama_url"`             // URL for Ollama service (default: http://localhost:11434)
+	GeminiAPIKey        string  `yaml:"gemini_api_key"`         // API key for Google Gemini (direct - discouraged, use api_key_file or env var instead)
+	GeminiAPIKeyFile    string  `yaml:"gemini_api_key_file"`    // Path to file containing Gemini API key
 	MaxTokens           int     `yaml:"max_tokens"`             // Maximum tokens for LLM response (default: 4096)
 	Temperature         float64 `yaml:"temperature"`            // Temperature for LLM sampling (default: 0.7)
 }
@@ -1011,6 +1013,7 @@ func applyEnvironmentVariables(cfg *Config) {
 	// 1. Try environment variables first (PGEDGE_ prefixed, then standard)
 	setStringFromEnvWithFallback(&cfg.LLM.AnthropicAPIKey, "PGEDGE_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")
 	setStringFromEnvWithFallback(&cfg.LLM.OpenAIAPIKey, "PGEDGE_OPENAI_API_KEY", "OPENAI_API_KEY")
+	setStringFromEnvWithFallback(&cfg.LLM.GeminiAPIKey, "PGEDGE_GEMINI_API_KEY", "GEMINI_API_KEY")
 	// 2. If env vars not set and api_key_file is specified, load from file
 	if cfg.LLM.AnthropicAPIKey == "" && cfg.LLM.AnthropicAPIKeyFile != "" {
 		if key, err := readAPIKeyFromFile(cfg.LLM.AnthropicAPIKeyFile); err == nil && key != "" {
@@ -1024,7 +1027,13 @@ func applyEnvironmentVariables(cfg *Config) {
 		}
 		// Note: errors are silently ignored - file may not exist and that's ok
 	}
-	// 3. Direct config value (if set) is already in cfg.LLM.AnthropicAPIKey/OpenAIAPIKey from mergeConfig
+	if cfg.LLM.GeminiAPIKey == "" && cfg.LLM.GeminiAPIKeyFile != "" {
+		if key, err := readAPIKeyFromFile(cfg.LLM.GeminiAPIKeyFile); err == nil && key != "" {
+			cfg.LLM.GeminiAPIKey = key
+		}
+		// Note: errors are silently ignored - file may not exist and that's ok
+	}
+	// 3. Direct config value (if set) is already in cfg.LLM.AnthropicAPIKey/OpenAIAPIKey/GeminiAPIKey from mergeConfig
 	setStringFromEnv(&cfg.LLM.OllamaURL, "PGEDGE_OLLAMA_URL")
 	// Base URL overrides for LLM providers (useful for proxies)
 	setStringFromEnv(&cfg.LLM.AnthropicBaseURL, "PGEDGE_ANTHROPIC_BASE_URL")
