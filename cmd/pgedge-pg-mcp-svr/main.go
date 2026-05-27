@@ -23,6 +23,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pgEdge/pgedge-go-llm-lib/llm"
+	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/all"
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/proxy"
+
 	"pgedge-postgres-mcp/internal/api"
 	"pgedge-postgres-mcp/internal/auth"
 	"pgedge-postgres-mcp/internal/compactor"
@@ -30,7 +34,7 @@ import (
 	"pgedge-postgres-mcp/internal/conversations"
 	"pgedge-postgres-mcp/internal/database"
 	"pgedge-postgres-mcp/internal/definitions"
-	"pgedge-postgres-mcp/internal/llmproxy"
+	"pgedge-postgres-mcp/internal/llmtracing"
 	"pgedge-postgres-mcp/internal/mcp"
 	"pgedge-postgres-mcp/internal/openapi"
 	"pgedge-postgres-mcp/internal/prompts"
@@ -871,33 +875,45 @@ func main() {
 
 			// Add LLM proxy handlers if enabled
 			if cfg.LLM.Enabled {
-				// Create LLM proxy configuration
-				llmConfig := &llmproxy.Config{
-					Provider:         cfg.LLM.Provider,
-					Model:            cfg.LLM.Model,
-					AnthropicAPIKey:  cfg.LLM.AnthropicAPIKey,
-					AnthropicBaseURL: cfg.LLM.AnthropicBaseURL,
-					OpenAIAPIKey:     cfg.LLM.OpenAIAPIKey,
-					OpenAIBaseURL:    cfg.LLM.OpenAIBaseURL,
-					OllamaURL:        cfg.LLM.OllamaURL,
-					MaxTokens:        cfg.LLM.MaxTokens,
-					Temperature:      cfg.LLM.Temperature,
+				providers := map[string]llm.Options{}
+				if cfg.LLM.AnthropicAPIKey != "" {
+					providers["anthropic"] = llm.Options{
+						APIKey:      cfg.LLM.AnthropicAPIKey,
+						Model:       cfg.LLM.Model,
+						BaseURL:     cfg.LLM.AnthropicBaseURL,
+						MaxTokens:   llm.Int(cfg.LLM.MaxTokens),
+						Temperature: llm.Float(cfg.LLM.Temperature),
+					}
+				}
+				if cfg.LLM.OpenAIAPIKey != "" {
+					providers["openai"] = llm.Options{
+						APIKey:      cfg.LLM.OpenAIAPIKey,
+						Model:       cfg.LLM.Model,
+						BaseURL:     cfg.LLM.OpenAIBaseURL,
+						MaxTokens:   llm.Int(cfg.LLM.MaxTokens),
+						Temperature: llm.Float(cfg.LLM.Temperature),
+					}
+				}
+				if cfg.LLM.OllamaURL != "" {
+					providers["ollama"] = llm.Options{
+						Model:       cfg.LLM.Model,
+						BaseURL:     cfg.LLM.OllamaURL,
+						MaxTokens:   llm.Int(cfg.LLM.MaxTokens),
+						Temperature: llm.Float(cfg.LLM.Temperature),
+					}
 				}
 
-				// Provider/model listing requires auth when enabled
-				mux.HandleFunc("/api/llm/providers",
-					authWrapper(func(w http.ResponseWriter, r *http.Request) {
-						llmproxy.HandleProviders(w, r, llmConfig)
-					}))
-				mux.HandleFunc("/api/llm/models",
-					authWrapper(func(w http.ResponseWriter, r *http.Request) {
-						llmproxy.HandleModels(w, r, llmConfig)
-					}))
-				// Chat endpoint requires auth (makes actual LLM API calls)
-				mux.HandleFunc("/api/llm/chat",
-					authWrapper(func(w http.ResponseWriter, r *http.Request) {
-						llmproxy.HandleChat(w, r, llmConfig)
-					}))
+				if len(providers) > 0 {
+					p := proxy.New(proxy.Config{
+						DefaultProvider: cfg.LLM.Provider,
+						Providers:       providers,
+						OnRequest:       llmtracing.OnRequest,
+						OnResponse:      llmtracing.OnResponse,
+						OnError:         llmtracing.OnError,
+					})
+					mux.Handle("/api/llm/",
+						authWrapper(http.StripPrefix("/api/llm", p.Handler()).ServeHTTP))
+				}
 			}
 
 			// Database listing and selection endpoints
