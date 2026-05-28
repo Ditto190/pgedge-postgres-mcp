@@ -1202,6 +1202,14 @@ const ChatInterface = ({ conversations }) => {
 
         setExecutingPrompt(true);
 
+        // Create AbortController for this request so the existing
+        // cancel button (wired to handleCancel via abortControllerRef)
+        // can terminate an in-flight streaming response. Share the ref
+        // with handleSend; only one flow can be active at a time
+        // because both gate on the `loading` flag.
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
+
         try {
             // Get the prompt with arguments from MCP server
             const promptResult = await mcpClient.getPrompt(promptName, args);
@@ -1312,6 +1320,7 @@ const ChatInterface = ({ conversations }) => {
                         provider: llmProviders.selectedProvider,
                         model: llmProviders.selectedModel,
                     }, {
+                        signal: abortController.signal,
                         sessionToken,
                         onTextChunk: (chunk) => {
                             if (!chunk) return;
@@ -1330,6 +1339,12 @@ const ChatInterface = ({ conversations }) => {
                         },
                     });
                 } catch (streamErr) {
+                    // Re-raise AbortError so the outer handler converts
+                    // it to a "Request cancelled" message.
+                    if (streamErr.name === 'AbortError') {
+                        throw streamErr;
+                    }
+
                     if (streamErr.status === 401) {
                         forceLogout();
                         throw new Error('Session expired. Please login again.');
@@ -1557,6 +1572,29 @@ const ChatInterface = ({ conversations }) => {
                 throw new Error('Maximum tool execution loops reached');
             }
         } catch (err) {
+            // Check if this was a user cancellation
+            if (err.name === 'AbortError') {
+                console.log('Prompt execution cancelled by user');
+                // Convert thinking message to cancelled message
+                setMessages(prev => {
+                    const newMessages = [...prev];
+                    if (newMessages.length > 0 && newMessages[newMessages.length - 1].isThinking) {
+                        const thinkingMsg = newMessages[newMessages.length - 1];
+                        newMessages[newMessages.length - 1] = {
+                            role: 'assistant',
+                            content: 'Request cancelled',
+                            timestamp: new Date().toISOString(),
+                            provider: thinkingMsg.provider,
+                            model: thinkingMsg.model,
+                            activity: thinkingMsg.activity || [],
+                            isCancelled: true
+                        };
+                    }
+                    return newMessages;
+                });
+                return;
+            }
+
             console.error('Prompt execution error:', err);
 
             // Convert thinking message to error message (preserve activity for debugging)
@@ -1580,6 +1618,7 @@ const ChatInterface = ({ conversations }) => {
         } finally {
             setExecutingPrompt(false);
             setLoading(false);
+            abortControllerRef.current = null;
         }
     }, [mcpClient, loading, messages, sessionToken, tools, llmProviders.selectedProvider, llmProviders.selectedModel, forceLogout, refreshTools, fetchDatabases, isWriteAccessEnabled, requestWriteConfirmation]);
 
