@@ -61,9 +61,8 @@ and this project adheres to
   hooks via the new `internal/llmtracing` package.
 
 - A streaming chat endpoint `/api/llm/v1/chat/stream` (SSE) is now
-  exposed alongside the non-streaming endpoint. The web client
-  continues to use the non-streaming endpoint; streaming UI follows
-  in a later change.
+  exposed alongside the non-streaming endpoint. The non-streaming
+  `/v1/chat` endpoint remains available for callers that prefer it.
 
 ### Fixed
 
