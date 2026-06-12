@@ -9,6 +9,27 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- A configurable per-attempt timeout bounds each individual HTTP attempt
+  to an LLM or embedding provider, so a single slow attempt becomes
+  retryable instead of consuming the whole request budget; configure it
+  with `per_attempt_timeout` in the `llm` and `embedding` config
+  sections, or the `PGEDGE_LLM_PER_ATTEMPT_TIMEOUT` and
+  `PGEDGE_EMBEDDING_PER_ATTEMPT_TIMEOUT` environment variables (default
+  60 seconds; 0 disables the cap).
+
+- Similarity search now validates the query embedding dimension against
+  the target vector column before querying, returning a clear error on a
+  mismatch instead of a raw database error.
+
+- Similarity search now supports pgvector `halfvec` columns; it detects
+  the column type and casts the query vector accordingly (requires
+  pgvector 0.7.0 or later).
+
+- The web client now uses the provider display name reported by the
+  proxy, falling back to its built-in labels when none is supplied.
+
 ### Changed
 
 - The LLM provider clients (Anthropic, OpenAI, and Ollama) now use the
