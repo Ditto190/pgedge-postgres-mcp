@@ -545,3 +545,26 @@ func mapKeys(m map[string]TableInfo) []string {
 	}
 	return keys
 }
+
+func TestDetectVectorColumn(t *testing.T) {
+	cases := []struct {
+		typeName string
+		dataType string
+		wantVec  bool
+		wantType string
+		wantDims int
+	}{
+		{"vector", "vector(1536)", true, "vector", 1536},
+		{"halfvec", "halfvec(1024)", true, "halfvec", 1024},
+		{"halfvec", "halfvec", true, "halfvec", 0},
+		{"text", "text", false, "", 0},
+	}
+	for _, c := range cases {
+		gotVec, gotType, gotDims := detectVectorColumn(c.typeName, c.dataType)
+		if gotVec != c.wantVec || gotType != c.wantType || gotDims != c.wantDims {
+			t.Errorf("detectVectorColumn(%q,%q) = (%v,%q,%d), want (%v,%q,%d)",
+				c.typeName, c.dataType, gotVec, gotType, gotDims,
+				c.wantVec, c.wantType, c.wantDims)
+		}
+	}
+}

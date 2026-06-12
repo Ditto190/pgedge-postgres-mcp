@@ -35,4 +35,5 @@ type ColumnInfo struct {
 	DefaultValue     string // Default value expression if any, empty otherwise
 	IsVectorColumn   bool   // True if this is a pgvector column
 	VectorDimensions int    // Number of dimensions for vector columns (0 if not a vector)
+	VectorType       string // Underlying vector type: "vector", "halfvec", or "" if not a vector column
 }

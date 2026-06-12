@@ -304,6 +304,26 @@ func (c *Client) IsClosed() bool {
 }
 
 // LoadMetadata loads table and column metadata for the default database
+// detectVectorColumn reports whether a column is a pgvector column,
+// its underlying type ("vector" or "halfvec"), and its declared
+// dimension count (0 if undeclared). typeName is the type/udt name and
+// dataType is the formatted type such as "vector(1536)".
+func detectVectorColumn(typeName, dataType string) (bool, string, int) {
+	switch typeName {
+	case "vector", "halfvec":
+	default:
+		return false, "", 0
+	}
+	dims := 0
+	re := regexp.MustCompile(`\((\d+)\)`)
+	if m := re.FindStringSubmatch(dataType); len(m) > 1 {
+		if d, err := strconv.Atoi(m[1]); err == nil {
+			dims = d
+		}
+	}
+	return true, typeName, dims
+}
+
 func (c *Client) LoadMetadata() error {
 	c.mu.RLock()
 	connStr := c.defaultConnStr
@@ -519,18 +539,14 @@ func (c *Client) LoadMetadataFor(connStr string) error {
 		}
 
 		if columnName.Valid && columnName.String != "" {
-			// Detect vector columns and extract dimensions
+			// Detect vector columns and extract their type and dimensions.
+			// Only treat a column as a vector when typeName is valid.
 			isVector := false
+			vectorType := ""
 			dimensions := 0
-			if typeName.Valid && typeName.String == "vector" {
-				isVector = true
-				// Parse dimensions from data_type (e.g., "vector(1536)")
-				re := regexp.MustCompile(`vector\((\d+)\)`)
-				if matches := re.FindStringSubmatch(dataType.String); len(matches) > 1 {
-					if dim, err := strconv.Atoi(matches[1]); err == nil {
-						dimensions = dim
-					}
-				}
+			if typeName.Valid {
+				isVector, vectorType, dimensions = detectVectorColumn(
+					typeName.String, dataType.String)
 			}
 
 			table.Columns = append(table.Columns, ColumnInfo{
@@ -546,6 +562,7 @@ func (c *Client) LoadMetadataFor(connStr string) error {
 				DefaultValue:     defaultValue,
 				IsVectorColumn:   isVector,
 				VectorDimensions: dimensions,
+				VectorType:       vectorType,
 			})
 			columnCount++
 		}
