@@ -383,3 +383,31 @@ func TestFindTableInMetadataMap(t *testing.T) {
 		})
 	}
 }
+
+func TestVectorCastFor(t *testing.T) {
+	if got := vectorCastFor("halfvec"); got != "halfvec" {
+		t.Errorf("vectorCastFor(halfvec) = %q, want halfvec", got)
+	}
+	if got := vectorCastFor("vector"); got != "vector" {
+		t.Errorf("vectorCastFor(vector) = %q, want vector", got)
+	}
+	if got := vectorCastFor(""); got != "vector" {
+		t.Errorf("vectorCastFor(\"\") = %q, want vector (default)", got)
+	}
+}
+
+func TestValidateEmbeddingDimensions(t *testing.T) {
+	cols := []database.ColumnInfo{
+		{ColumnName: "emb", VectorDimensions: 3, VectorType: "vector"},
+	}
+	if err := validateEmbeddingDimensions(cols, 3); err != nil {
+		t.Errorf("matching dims: unexpected error %v", err)
+	}
+	if err := validateEmbeddingDimensions(cols, 4); err == nil {
+		t.Error("mismatched dims: expected error, got nil")
+	}
+	zero := []database.ColumnInfo{{ColumnName: "e", VectorDimensions: 0}}
+	if err := validateEmbeddingDimensions(zero, 5); err != nil {
+		t.Errorf("unknown dims: unexpected error %v", err)
+	}
+}

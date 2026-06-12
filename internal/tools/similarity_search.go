@@ -316,6 +316,13 @@ To avoid rate limits (30,000 input tokens/minute):
 				return mcp.NewToolError(errMsg.String())
 			}
 
+			// Validate the embedding dimensions against the target columns
+			// before issuing the query, so we can return a clear error.
+			if err := validateEmbeddingDimensions(vectorCols, len(queryEmbedding)); err != nil {
+				return mcp.NewToolError(fmt.Sprintf(
+					"Embedding dimension mismatch: %v. Check that the embedding model matches the target column.", err))
+			}
+
 			// Step 5: Perform weighted vector search
 			results, err := performWeightedVectorSearch(
 				dbClient,
@@ -644,6 +651,29 @@ func generateQueryEmbeddingWithConfig(serverCfg *config.Config, queryText string
 	return vector, nil
 }
 
+// vectorCastFor returns the pgvector type to cast the query literal to
+// for a given column vector type, defaulting to "vector".
+func vectorCastFor(vectorType string) string {
+	if vectorType == "halfvec" {
+		return "halfvec"
+	}
+	return "vector"
+}
+
+// validateEmbeddingDimensions returns an error if the query embedding
+// length does not match a column's declared dimension. Columns with an
+// unknown dimension (0) are skipped.
+func validateEmbeddingDimensions(cols []database.ColumnInfo, embeddingLen int) error {
+	for _, c := range cols {
+		if c.VectorDimensions > 0 && c.VectorDimensions != embeddingLen {
+			return fmt.Errorf(
+				"embedding dimension %d does not match column %q dimension %d",
+				embeddingLen, c.ColumnName, c.VectorDimensions)
+		}
+	}
+	return nil
+}
+
 func performWeightedVectorSearch(
 	dbClient *database.Client,
 	tableName string,
@@ -674,12 +704,22 @@ func performWeightedVectorSearch(
 	}
 	colList := strings.Join(quotedCols, ", ")
 
+	// Build a lookup of column name -> vector type so the query literal
+	// can be cast to the correct pgvector type (vector vs halfvec).
+	typeByName := make(map[string]string, len(vectorCols))
+	for _, vc := range vectorCols {
+		typeByName[vc.ColumnName] = vc.VectorType
+	}
+
 	// Build weighted distance calculation with quoted column names
 	var weightedParts []string
 	weightMap := make(map[string]float64)
 
 	for _, weight := range columnWeights {
-		weightedParts = append(weightedParts, fmt.Sprintf("(%s %s $1::vector) * %f", quoteIdentifier(weight.VectorName), distOp, weight.Weight))
+		cast := vectorCastFor(typeByName[weight.VectorName])
+		weightedParts = append(weightedParts, fmt.Sprintf(
+			"(%s %s $1::%s) * %f",
+			quoteIdentifier(weight.VectorName), distOp, cast, weight.Weight))
 		weightMap[weight.VectorName] = weight.Weight
 	}
 
@@ -687,7 +727,10 @@ func performWeightedVectorSearch(
 	if len(weightedParts) == 0 {
 		for i := range vectorCols {
 			weight := 1.0 / float64(len(vectorCols))
-			weightedParts = append(weightedParts, fmt.Sprintf("(%s %s $1::vector) * %f", quoteIdentifier(vectorCols[i].ColumnName), distOp, weight))
+			cast := vectorCastFor(vectorCols[i].VectorType)
+			weightedParts = append(weightedParts, fmt.Sprintf(
+				"(%s %s $1::%s) * %f",
+				quoteIdentifier(vectorCols[i].ColumnName), distOp, cast, weight))
 			weightMap[vectorCols[i].ColumnName] = weight
 		}
 	}
