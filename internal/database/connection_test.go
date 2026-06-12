@@ -559,12 +559,12 @@ func TestDetectVectorColumn(t *testing.T) {
 		{"halfvec", "halfvec", true, "halfvec", 0},
 		{"text", "text", false, "", 0},
 	}
-	for _, c := range cases {
-		gotVec, gotType, gotDims := detectVectorColumn(c.typeName, c.dataType)
-		if gotVec != c.wantVec || gotType != c.wantType || gotDims != c.wantDims {
+	for _, tc := range cases {
+		gotVec, gotType, gotDims := detectVectorColumn(tc.typeName, tc.dataType)
+		if gotVec != tc.wantVec || gotType != tc.wantType || gotDims != tc.wantDims {
 			t.Errorf("detectVectorColumn(%q,%q) = (%v,%q,%d), want (%v,%q,%d)",
-				c.typeName, c.dataType, gotVec, gotType, gotDims,
-				c.wantVec, c.wantType, c.wantDims)
+				tc.typeName, tc.dataType, gotVec, gotType, gotDims,
+				tc.wantVec, tc.wantType, tc.wantDims)
 		}
 	}
 }

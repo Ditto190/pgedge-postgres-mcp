@@ -303,7 +303,10 @@ func (c *Client) IsClosed() bool {
 	return c.closed
 }
 
-// LoadMetadata loads table and column metadata for the default database
+// vectorDimsRe extracts the declared dimension count from a formatted
+// vector type such as "vector(1536)" or "halfvec(1024)".
+var vectorDimsRe = regexp.MustCompile(`\((\d+)\)`)
+
 // detectVectorColumn reports whether a column is a pgvector column,
 // its underlying type ("vector" or "halfvec"), and its declared
 // dimension count (0 if undeclared). typeName is the type/udt name and
@@ -315,8 +318,7 @@ func detectVectorColumn(typeName, dataType string) (bool, string, int) {
 		return false, "", 0
 	}
 	dims := 0
-	re := regexp.MustCompile(`\((\d+)\)`)
-	if m := re.FindStringSubmatch(dataType); len(m) > 1 {
+	if m := vectorDimsRe.FindStringSubmatch(dataType); len(m) > 1 {
 		if d, err := strconv.Atoi(m[1]); err == nil {
 			dims = d
 		}
@@ -324,6 +326,7 @@ func detectVectorColumn(typeName, dataType string) (bool, string, int) {
 	return true, typeName, dims
 }
 
+// LoadMetadata loads table and column metadata for the default database
 func (c *Client) LoadMetadata() error {
 	c.mu.RLock()
 	connStr := c.defaultConnStr
