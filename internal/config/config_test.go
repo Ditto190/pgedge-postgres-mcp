@@ -1162,3 +1162,26 @@ func TestNamedDatabaseConfig_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestPerAttemptTimeoutDefaults(t *testing.T) {
+	cfg := defaultConfig()
+	if cfg.LLM.PerAttemptTimeout != 60 {
+		t.Errorf("LLM.PerAttemptTimeout default = %d, want 60", cfg.LLM.PerAttemptTimeout)
+	}
+	if cfg.Embedding.PerAttemptTimeout != 60 {
+		t.Errorf("Embedding.PerAttemptTimeout default = %d, want 60", cfg.Embedding.PerAttemptTimeout)
+	}
+}
+
+func TestPerAttemptTimeoutFromEnv(t *testing.T) {
+	t.Setenv("PGEDGE_LLM_PER_ATTEMPT_TIMEOUT", "30")
+	t.Setenv("PGEDGE_EMBEDDING_PER_ATTEMPT_TIMEOUT", "15")
+	cfg := defaultConfig()
+	applyEnvironmentVariables(cfg)
+	if cfg.LLM.PerAttemptTimeout != 30 {
+		t.Errorf("LLM.PerAttemptTimeout = %d, want 30", cfg.LLM.PerAttemptTimeout)
+	}
+	if cfg.Embedding.PerAttemptTimeout != 15 {
+		t.Errorf("Embedding.PerAttemptTimeout = %d, want 15", cfg.Embedding.PerAttemptTimeout)
+	}
+}

@@ -431,16 +431,17 @@ func (cfg *NamedDatabaseConfig) IsAllowedForLLMSwitching() bool {
 
 // EmbeddingConfig holds embedding generation settings
 type EmbeddingConfig struct {
-	Enabled          bool   `yaml:"enabled"`             // Whether embedding generation is enabled (default: false)
-	Provider         string `yaml:"provider"`            // "voyage", "openai", or "ollama"
-	Model            string `yaml:"model"`               // Provider-specific model name
-	VoyageAPIKey     string `yaml:"voyage_api_key"`      // API key for Voyage AI (direct - discouraged, use api_key_file or env var)
-	VoyageAPIKeyFile string `yaml:"voyage_api_key_file"` // Path to file containing Voyage API key
-	VoyageBaseURL    string `yaml:"voyage_base_url"`     // Base URL for Voyage API (default: https://api.voyageai.com/v1/embeddings)
-	OpenAIAPIKey     string `yaml:"openai_api_key"`      // API key for OpenAI (direct - discouraged, use api_key_file or env var)
-	OpenAIAPIKeyFile string `yaml:"openai_api_key_file"` // Path to file containing OpenAI API key
-	OpenAIBaseURL    string `yaml:"openai_base_url"`     // Base URL for OpenAI API (default: https://api.openai.com/v1)
-	OllamaURL        string `yaml:"ollama_url"`          // URL for Ollama service (default: http://localhost:11434)
+	Enabled           bool   `yaml:"enabled"`             // Whether embedding generation is enabled (default: false)
+	Provider          string `yaml:"provider"`            // "voyage", "openai", or "ollama"
+	Model             string `yaml:"model"`               // Provider-specific model name
+	VoyageAPIKey      string `yaml:"voyage_api_key"`      // API key for Voyage AI (direct - discouraged, use api_key_file or env var)
+	VoyageAPIKeyFile  string `yaml:"voyage_api_key_file"` // Path to file containing Voyage API key
+	VoyageBaseURL     string `yaml:"voyage_base_url"`     // Base URL for Voyage API (default: https://api.voyageai.com/v1/embeddings)
+	OpenAIAPIKey      string `yaml:"openai_api_key"`      // API key for OpenAI (direct - discouraged, use api_key_file or env var)
+	OpenAIAPIKeyFile  string `yaml:"openai_api_key_file"` // Path to file containing OpenAI API key
+	OpenAIBaseURL     string `yaml:"openai_base_url"`     // Base URL for OpenAI API (default: https://api.openai.com/v1)
+	OllamaURL         string `yaml:"ollama_url"`          // URL for Ollama service (default: http://localhost:11434)
+	PerAttemptTimeout int    `yaml:"per_attempt_timeout"` // Per-attempt HTTP timeout in seconds (0 = unlimited; default: 60)
 }
 
 // LLMConfig holds LLM configuration for web client chat proxy
@@ -459,6 +460,7 @@ type LLMConfig struct {
 	GeminiAPIKeyFile    string  `yaml:"gemini_api_key_file"`    // Path to file containing Gemini API key
 	MaxTokens           int     `yaml:"max_tokens"`             // Maximum tokens for LLM response (default: 4096)
 	Temperature         float64 `yaml:"temperature"`            // Temperature for LLM sampling (default: 0.7)
+	PerAttemptTimeout   int     `yaml:"per_attempt_timeout"`    // Per-attempt HTTP timeout in seconds (0 = unlimited; default: 60)
 }
 
 // KnowledgebaseConfig holds knowledgebase configuration
@@ -598,21 +600,23 @@ func defaultConfig() *Config {
 		},
 		Databases: []NamedDatabaseConfig{}, // Empty by default, populated from config file
 		Embedding: EmbeddingConfig{
-			Enabled:      false,                    // Disabled by default (opt-in)
-			Provider:     "ollama",                 // Default provider
-			Model:        "nomic-embed-text",       // Default Ollama model
-			VoyageAPIKey: "",                       // Must be provided if using Voyage AI
-			OllamaURL:    "http://localhost:11434", // Default Ollama URL
+			Enabled:           false,                    // Disabled by default (opt-in)
+			Provider:          "ollama",                 // Default provider
+			Model:             "nomic-embed-text",       // Default Ollama model
+			VoyageAPIKey:      "",                       // Must be provided if using Voyage AI
+			OllamaURL:         "http://localhost:11434", // Default Ollama URL
+			PerAttemptTimeout: 60,                       // Default per-attempt HTTP timeout (seconds)
 		},
 		LLM: LLMConfig{
-			Enabled:         false,                    // Disabled by default (opt-in)
-			Provider:        "anthropic",              // Default provider
-			Model:           "claude-sonnet-4-5",      // Default Anthropic model
-			AnthropicAPIKey: "",                       // Must be provided if using Anthropic
-			OpenAIAPIKey:    "",                       // Must be provided if using OpenAI
-			OllamaURL:       "http://localhost:11434", // Default Ollama URL
-			MaxTokens:       4096,                     // Default max tokens
-			Temperature:     0.7,                      // Default temperature
+			Enabled:           false,                    // Disabled by default (opt-in)
+			Provider:          "anthropic",              // Default provider
+			Model:             "claude-sonnet-4-5",      // Default Anthropic model
+			AnthropicAPIKey:   "",                       // Must be provided if using Anthropic
+			OpenAIAPIKey:      "",                       // Must be provided if using OpenAI
+			OllamaURL:         "http://localhost:11434", // Default Ollama URL
+			MaxTokens:         4096,                     // Default max tokens
+			Temperature:       0.7,                      // Default temperature
+			PerAttemptTimeout: 60,                       // Default per-attempt HTTP timeout (seconds)
 		},
 		Knowledgebase: KnowledgebaseConfig{
 			Enabled:               false,                    // Disabled by default (opt-in)
@@ -1010,6 +1014,7 @@ func applyEnvironmentVariables(cfg *Config) {
 	// Base URL overrides for embedding providers (useful for proxies)
 	setStringFromEnv(&cfg.Embedding.VoyageBaseURL, "PGEDGE_VOYAGE_BASE_URL")
 	setStringFromEnv(&cfg.Embedding.OpenAIBaseURL, "PGEDGE_OPENAI_EMBEDDING_BASE_URL")
+	setIntFromEnv(&cfg.Embedding.PerAttemptTimeout, "PGEDGE_EMBEDDING_PER_ATTEMPT_TIMEOUT")
 
 	// LLM
 	setBoolFromEnv(&cfg.LLM.Enabled, "PGEDGE_LLM_ENABLED")
@@ -1045,6 +1050,7 @@ func applyEnvironmentVariables(cfg *Config) {
 	setStringFromEnv(&cfg.LLM.AnthropicBaseURL, "PGEDGE_ANTHROPIC_BASE_URL")
 	setStringFromEnv(&cfg.LLM.OpenAIBaseURL, "PGEDGE_OPENAI_BASE_URL")
 	setIntFromEnv(&cfg.LLM.MaxTokens, "PGEDGE_LLM_MAX_TOKENS")
+	setIntFromEnv(&cfg.LLM.PerAttemptTimeout, "PGEDGE_LLM_PER_ATTEMPT_TIMEOUT")
 	// Temperature is a float, but we'll handle it specially
 	if val := os.Getenv("PGEDGE_LLM_TEMPERATURE"); val != "" {
 		var floatVal float64
