@@ -878,36 +878,40 @@ func main() {
 				providers := map[string]llm.Options{}
 				if cfg.LLM.AnthropicAPIKey != "" {
 					providers["anthropic"] = llm.Options{
-						APIKey:      cfg.LLM.AnthropicAPIKey,
-						Model:       cfg.LLM.Model,
-						BaseURL:     cfg.LLM.AnthropicBaseURL,
-						MaxTokens:   llm.Int(cfg.LLM.MaxTokens),
-						Temperature: llm.Float(cfg.LLM.Temperature),
+						APIKey:            cfg.LLM.AnthropicAPIKey,
+						Model:             cfg.LLM.Model,
+						BaseURL:           cfg.LLM.AnthropicBaseURL,
+						MaxTokens:         llm.Int(cfg.LLM.MaxTokens),
+						Temperature:       llm.Float(cfg.LLM.Temperature),
+						PerAttemptTimeout: time.Duration(cfg.LLM.PerAttemptTimeout) * time.Second,
 					}
 				}
 				if cfg.LLM.OpenAIAPIKey != "" {
 					providers["openai"] = llm.Options{
-						APIKey:      cfg.LLM.OpenAIAPIKey,
-						Model:       cfg.LLM.Model,
-						BaseURL:     cfg.LLM.OpenAIBaseURL,
-						MaxTokens:   llm.Int(cfg.LLM.MaxTokens),
-						Temperature: llm.Float(cfg.LLM.Temperature),
+						APIKey:            cfg.LLM.OpenAIAPIKey,
+						Model:             cfg.LLM.Model,
+						BaseURL:           cfg.LLM.OpenAIBaseURL,
+						MaxTokens:         llm.Int(cfg.LLM.MaxTokens),
+						Temperature:       llm.Float(cfg.LLM.Temperature),
+						PerAttemptTimeout: time.Duration(cfg.LLM.PerAttemptTimeout) * time.Second,
 					}
 				}
 				if cfg.LLM.OllamaURL != "" {
 					providers["ollama"] = llm.Options{
-						Model:       cfg.LLM.Model,
-						BaseURL:     cfg.LLM.OllamaURL,
-						MaxTokens:   llm.Int(cfg.LLM.MaxTokens),
-						Temperature: llm.Float(cfg.LLM.Temperature),
+						Model:             cfg.LLM.Model,
+						BaseURL:           cfg.LLM.OllamaURL,
+						MaxTokens:         llm.Int(cfg.LLM.MaxTokens),
+						Temperature:       llm.Float(cfg.LLM.Temperature),
+						PerAttemptTimeout: time.Duration(cfg.LLM.PerAttemptTimeout) * time.Second,
 					}
 				}
 				if cfg.LLM.GeminiAPIKey != "" {
 					providers["gemini"] = llm.Options{
-						APIKey:      cfg.LLM.GeminiAPIKey,
-						Model:       cfg.LLM.Model,
-						MaxTokens:   llm.Int(cfg.LLM.MaxTokens),
-						Temperature: llm.Float(cfg.LLM.Temperature),
+						APIKey:            cfg.LLM.GeminiAPIKey,
+						Model:             cfg.LLM.Model,
+						MaxTokens:         llm.Int(cfg.LLM.MaxTokens),
+						Temperature:       llm.Float(cfg.LLM.Temperature),
+						PerAttemptTimeout: time.Duration(cfg.LLM.PerAttemptTimeout) * time.Second,
 					}
 				}
 
