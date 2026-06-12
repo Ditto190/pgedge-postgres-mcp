@@ -724,6 +724,9 @@ func mergeConfig(dest, src *Config) {
 		if src.Embedding.OllamaURL != "" {
 			dest.Embedding.OllamaURL = src.Embedding.OllamaURL
 		}
+		if src.Embedding.PerAttemptTimeout != 0 {
+			dest.Embedding.PerAttemptTimeout = src.Embedding.PerAttemptTimeout
+		}
 	}
 
 	// LLM - merge if any LLM fields are set
@@ -767,6 +770,9 @@ func mergeConfig(dest, src *Config) {
 		}
 		if src.LLM.Temperature != 0 {
 			dest.LLM.Temperature = src.LLM.Temperature
+		}
+		if src.LLM.PerAttemptTimeout != 0 {
+			dest.LLM.PerAttemptTimeout = src.LLM.PerAttemptTimeout
 		}
 	}
 

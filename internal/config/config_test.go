@@ -740,6 +740,29 @@ func TestMergeConfig(t *testing.T) {
 	}
 }
 
+func TestMergePerAttemptTimeout(t *testing.T) {
+	dest := defaultConfig()
+	src := &Config{
+		LLM: LLMConfig{
+			Provider:          "anthropic",
+			PerAttemptTimeout: 25,
+		},
+		Embedding: EmbeddingConfig{
+			Provider:          "voyage",
+			PerAttemptTimeout: 12,
+		},
+	}
+
+	mergeConfig(dest, src)
+
+	if dest.LLM.PerAttemptTimeout != 25 {
+		t.Errorf("LLM.PerAttemptTimeout = %d, want 25", dest.LLM.PerAttemptTimeout)
+	}
+	if dest.Embedding.PerAttemptTimeout != 12 {
+		t.Errorf("Embedding.PerAttemptTimeout = %d, want 12", dest.Embedding.PerAttemptTimeout)
+	}
+}
+
 func TestApplyCLIFlags(t *testing.T) {
 	cfg := defaultConfig()
 	flags := CLIFlags{
