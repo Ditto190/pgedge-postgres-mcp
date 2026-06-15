@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Muhammad Aqeel <muhammad.aqeel@pgedge.com>
 Build-Depends: debhelper-compat (= 13)
 Standards-Version: 4.1.3
-Homepage: https://github.com/pgEdge/pgedge-mcp
+Homepage: https://github.com/pgEdge/pgedge-postgres-mcp
 
 Package: pgedge-postgres-mcp
 Architecture: any

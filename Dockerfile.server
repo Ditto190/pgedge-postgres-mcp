@@ -59,9 +59,22 @@ COPY --chmod=755 docker/init-server.sh /app/init-server.sh
 # Create knowledgebase directory
 RUN mkdir -p /usr/share/pgedge/nla-kb && chown 1001:1001 /usr/share/pgedge/nla-kb
 
-# Download knowledgebase from URL if KB_SOURCE is a URL
-# This must be done after the directory is created
-RUN if [ -n "${KB_SOURCE}" ] && echo "${KB_SOURCE}" | grep -qE '^https?://'; then \
+# Provision the knowledgebase (must run after the directory is created):
+#   * KB_SOURCE=package          -> install the pgedge-ai-kb package from the
+#                                   pgEdge dnf repo (ships kb.db at
+#                                   /usr/share/pgedge/pgedge-ai-kb/kb.db) and
+#                                   move it to where the server reads it.
+#   * KB_SOURCE=http(s)://.../kb.db -> download the kb.db directly (override).
+RUN if [ "${KB_SOURCE}" = "package" ]; then \
+        echo "Installing pgedge-ai-kb package from the pgEdge repo..." && \
+        rpm --import https://dnf.pgedge.com/keys/pgedge-rsa.pub && \
+        printf '[pgedge-noarch]\nname=pgEdge RPM Repository (noarch)\nbaseurl=https://dnf.pgedge.com/release/9/RPMS/noarch/\nenabled=1\ngpgcheck=1\npriority=1\ngpgkey=https://dnf.pgedge.com/keys/pgedge-rsa.pub\n' > /etc/yum.repos.d/pgedge.repo && \
+        microdnf install -y pgedge-ai-kb && \
+        mv /usr/share/pgedge/pgedge-ai-kb/kb.db /usr/share/pgedge/nla-kb/kb.db && \
+        chown 1001:1001 /usr/share/pgedge/nla-kb/kb.db && \
+        microdnf clean all && \
+        echo "Knowledgebase installed from pgedge-ai-kb package"; \
+    elif [ -n "${KB_SOURCE}" ] && echo "${KB_SOURCE}" | grep -qE '^https?://'; then \
         echo "Downloading knowledgebase from ${KB_SOURCE}..." && \
         curl -fsSL -o /usr/share/pgedge/nla-kb/kb.db "${KB_SOURCE}" && \
         chown 1001:1001 /usr/share/pgedge/nla-kb/kb.db && \

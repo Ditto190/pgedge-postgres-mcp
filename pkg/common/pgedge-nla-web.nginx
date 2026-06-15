@@ -1,7 +1,9 @@
 # pgEdge Natural Language Agent - Web UI Nginx Configuration
 #
-# Enable with: ln -s /etc/nginx/sites-available/pgedge-nla-web /etc/nginx/sites-enabled/
-# Then: systemctl reload nginx
+# RPM: installed to /etc/nginx/conf.d/pgedge-nla-web.conf (auto-loaded by nginx).
+# DEB: installed to /etc/nginx/sites-available/pgedge-nla-web; enable with:
+#        ln -s /etc/nginx/sites-available/pgedge-nla-web /etc/nginx/sites-enabled/
+# Then reload: systemctl reload nginx
 
 server {
     listen 8081;
@@ -37,7 +39,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded_Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $scheme;
 
         # Timeouts for long-running LLM requests
         proxy_connect_timeout 90s;
@@ -52,7 +54,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded_Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $scheme;
 
         # Timeouts for long-running queries
         proxy_connect_timeout 90s;

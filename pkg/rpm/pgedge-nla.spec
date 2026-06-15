@@ -222,4 +222,3 @@ rm -rf %{buildroot}
 - Server: MCP server for PostgreSQL (pgedge-postgres-mcp)
 - CLI: Command-line chat client (pgedge-nla-cli)
 - Web: Web-based chat interface (pgedge-nla-web)
-</content>
