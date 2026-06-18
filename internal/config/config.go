@@ -875,10 +875,26 @@ func setStringFromEnvWithFallback(dest *string, keys ...string) {
 
 // setBoolFromEnv sets a boolean config value from an environment variable if it exists
 // Accepts "true", "1", or "yes" (case-insensitive) as true values
+// parseBoolEnv interprets an environment-variable value as a boolean.
+// "true", "1", and "yes" are true; "false", "0", and "no" are false (all
+// case-insensitive). Any other value is treated as false, but a warning is
+// logged so operators get a diagnostic instead of a silent disable.
+func parseBoolEnv(key, val string) bool {
+	switch strings.ToLower(val) {
+	case "true", "1", "yes":
+		return true
+	case "false", "0", "no":
+		return false
+	default:
+		log.Printf("WARNING: unrecognised value %q for %s; expected "+
+			"true/false/1/0/yes/no — treating as false", val, key)
+		return false
+	}
+}
+
 func setBoolFromEnv(dest *bool, key string) {
 	if val := os.Getenv(key); val != "" {
-		lower := strings.ToLower(val)
-		*dest = lower == "true" || lower == "1" || lower == "yes"
+		*dest = parseBoolEnv(key, val)
 	}
 }
 
@@ -891,8 +907,7 @@ func setBoolPtrFromEnv(dest **bool, key string) {
 	if val == "" {
 		return
 	}
-	lower := strings.ToLower(val)
-	b := lower == "true" || lower == "1" || lower == "yes"
+	b := parseBoolEnv(key, val)
 	*dest = &b
 }
 

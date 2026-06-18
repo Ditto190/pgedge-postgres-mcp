@@ -870,6 +870,19 @@ func TestSetBoolPtrFromEnv(t *testing.T) {
 			t.Errorf("expected false (override), got true")
 		}
 	})
+
+	t.Run("unrecognised value is treated as false", func(t *testing.T) {
+		os.Setenv(key, "enabled")
+		defer os.Unsetenv(key)
+		var dest *bool
+		setBoolPtrFromEnv(&dest, key)
+		if dest == nil {
+			t.Fatal("expected non-nil pointer for unrecognised value")
+		}
+		if *dest {
+			t.Errorf("expected false for unrecognised value, got true")
+		}
+	})
 }
 
 func TestApplyEnvironmentVariables_Builtins(t *testing.T) {
