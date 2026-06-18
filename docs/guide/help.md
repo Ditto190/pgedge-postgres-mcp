@@ -1,6 +1,6 @@
 # Using Online Help
 
-You can include the `-help` keyword at the command line to retreive an online list of command options:
+You can include the `-help` keyword at the command line to retrieve an online list of command options:
 
 ```bash
 bin/pgedge-postgres-mcp -help
