@@ -259,14 +259,14 @@ const Message = React.memo(({ message, showActivity, renderMarkdown, debug }) =>
                                     || (usage.completion_tokens ?? 0) > 0
                                     || (usage.total_tokens ?? 0) > 0;
                                 if (!hasTokens && !hasCache) {
-                                    return <div>ℹ️ Provider did not report token counts</div>;
+                                    return <Box component="span" sx={{ display: 'block' }}>ℹ️ Provider did not report token counts</Box>;
                                 }
                                 return (
                                     <>
                                         {hasCache && (
-                                            <div>📊 Prompt Cache: Created {cacheCreate}, Read {cacheRead}</div>
+                                            <Box component="span" sx={{ display: 'block' }}>📊 Prompt Cache: Created {cacheCreate}, Read {cacheRead}</Box>
                                         )}
-                                        <div>🔢 Tokens: Input {usage.prompt_tokens || 0}, Output {usage.completion_tokens || 0}, Total {usage.total_tokens || 0}</div>
+                                        <Box component="span" sx={{ display: 'block' }}>🔢 Tokens: Input {usage.prompt_tokens || 0}, Output {usage.completion_tokens || 0}, Total {usage.total_tokens || 0}</Box>
                                     </>
                                 );
                             })()}
