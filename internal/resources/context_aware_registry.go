@@ -58,7 +58,7 @@ func (r *ContextAwareRegistry) List() []mcp.Resource {
 	if r.cfg.Builtins.Resources.IsResourceEnabled(URISystemInfo) {
 		resources = append(resources, mcp.Resource{
 			URI:         URISystemInfo,
-			Name:        "PostgreSQL System Information",
+			Name:        "postgresql_system_info",
 			Description: "Returns PostgreSQL version, operating system, and build architecture information. Provides a quick way to check server version and platform details.",
 			MimeType:    "application/json",
 		})

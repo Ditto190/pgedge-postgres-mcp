@@ -277,7 +277,7 @@ Get available resources.
     "resources": [
       {
         "uri": "pg://system_info",
-        "name": "PostgreSQL System Information",
+        "name": "postgresql_system_info",
         "description": "Returns PostgreSQL version...",
         "mimeType": "application/json"
       }

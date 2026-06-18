@@ -140,19 +140,19 @@ for details.
 
 | Configuration File Option | CLI Flag | Environment Variable | Description |
 |--------------------------|----------|---------------------|-------------|
-| `builtins.tools.query_database` | N/A | N/A | Enable query_database tool (default: true) |
-| `builtins.tools.get_schema_info` | N/A | N/A | Enable get_schema_info tool (default: true) |
-| `builtins.tools.similarity_search` | N/A | N/A | Enable similarity_search tool (default: true) |
-| `builtins.tools.execute_explain` | N/A | N/A | Enable execute_explain tool (default: true) |
-| `builtins.tools.generate_embedding` | N/A | N/A | Enable generate_embedding tool (default: true) |
-| `builtins.tools.search_knowledgebase` | N/A | N/A | Enable search_knowledgebase tool (default: true) |
-| `builtins.tools.count_rows` | N/A | N/A | Enable count_rows tool (default: true) |
-| `builtins.tools.llm_connection_selection` | N/A | N/A | Enable LLM database switching tools (default: false) |
-| `builtins.resources.system_info` | N/A | N/A | Enable pg://system_info resource (default: true) |
-| `builtins.prompts.explore_database` | N/A | N/A | Enable explore-database prompt (default: true) |
-| `builtins.prompts.setup_semantic_search` | N/A | N/A | Enable setup-semantic-search prompt (default: true) |
-| `builtins.prompts.diagnose_query_issue` | N/A | N/A | Enable diagnose-query-issue prompt (default: true) |
-| `builtins.prompts.design_schema` | N/A | N/A | Enable design-schema prompt (default: true) |
+| `builtins.tools.query_database` | N/A | `PGEDGE_BUILTIN_TOOL_QUERY_DATABASE` | Enable query_database tool (default: true) |
+| `builtins.tools.get_schema_info` | N/A | `PGEDGE_BUILTIN_TOOL_GET_SCHEMA_INFO` | Enable get_schema_info tool (default: true) |
+| `builtins.tools.similarity_search` | N/A | `PGEDGE_BUILTIN_TOOL_SIMILARITY_SEARCH` | Enable similarity_search tool (default: true) |
+| `builtins.tools.execute_explain` | N/A | `PGEDGE_BUILTIN_TOOL_EXECUTE_EXPLAIN` | Enable execute_explain tool (default: true) |
+| `builtins.tools.generate_embedding` | N/A | `PGEDGE_BUILTIN_TOOL_GENERATE_EMBEDDING` | Enable generate_embedding tool (default: true) |
+| `builtins.tools.search_knowledgebase` | N/A | `PGEDGE_BUILTIN_TOOL_SEARCH_KNOWLEDGEBASE` | Enable search_knowledgebase tool (default: true) |
+| `builtins.tools.count_rows` | N/A | `PGEDGE_BUILTIN_TOOL_COUNT_ROWS` | Enable count_rows tool (default: true) |
+| `builtins.tools.llm_connection_selection` | N/A | `PGEDGE_BUILTIN_TOOL_LLM_CONNECTION_SELECTION` | Enable LLM database switching tools (default: false) |
+| `builtins.resources.system_info` | N/A | `PGEDGE_BUILTIN_RESOURCE_SYSTEM_INFO` | Enable pg://system_info resource (default: true) |
+| `builtins.prompts.explore_database` | N/A | `PGEDGE_BUILTIN_PROMPT_EXPLORE_DATABASE` | Enable explore-database prompt (default: true) |
+| `builtins.prompts.setup_semantic_search` | N/A | `PGEDGE_BUILTIN_PROMPT_SETUP_SEMANTIC_SEARCH` | Enable setup-semantic-search prompt (default: true) |
+| `builtins.prompts.diagnose_query_issue` | N/A | `PGEDGE_BUILTIN_PROMPT_DIAGNOSE_QUERY_ISSUE` | Enable diagnose-query-issue prompt (default: true) |
+| `builtins.prompts.design_schema` | N/A | `PGEDGE_BUILTIN_PROMPT_DESIGN_SCHEMA` | Enable design-schema prompt (default: true) |
 
 ### Other Options
 

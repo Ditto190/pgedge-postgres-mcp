@@ -42,7 +42,7 @@ func TestReadResourceTool(t *testing.T) {
 			resources: []mcp.Resource{
 				{
 					URI:         "pg://system_info",
-					Name:        "PostgreSQL System Information",
+					Name:        "postgresql_system_info",
 					Description: "Returns version and system info",
 					MimeType:    "application/json",
 				},
@@ -72,7 +72,7 @@ func TestReadResourceTool(t *testing.T) {
 		if !strings.Contains(content, "pg://system_info") {
 			t.Error("Expected 'pg://system_info' URI")
 		}
-		if !strings.Contains(content, "PostgreSQL System Information") {
+		if !strings.Contains(content, "postgresql_system_info") {
 			t.Error("Expected system info resource name")
 		}
 	})
