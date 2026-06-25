@@ -12,6 +12,10 @@
 #   .\install.ps1 -Detect -DbPort 5433
 #   .\install.ps1 -OwnDb -DbHost localhost -DbPort 5432 -DbName mydb -DbUser me -DbPass secret
 #
+# Pin a specific version (escape hatch — skips the latest-release lookup):
+#   .\install.ps1 -Version v1.0.0
+#   $env:PGEDGE_MCP_VERSION = "v1.0.0"; irm .../install.ps1 | iex   # env var equivalent
+#
 # What it does:
 #   1. Downloads the pgEdge MCP Server binary for Windows (x86_64)
 #   2. Helps you connect to a database (your own or a demo with sample data)
@@ -26,7 +30,8 @@ param(
     [string]$DbPort,
     [string]$DbName,
     [string]$DbUser,
-    [string]$DbPass
+    [string]$DbPass,
+    [string]$Version
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,6 +49,8 @@ $DemoPort   = 5432
 
 $script:Version      = ""
 $script:VersionNum   = ""
+# Pinned version: -Version flag wins, else PGEDGE_MCP_VERSION env var, else empty.
+$script:PinVersion   = if ($Version) { $Version } elseif ($env:PGEDGE_MCP_VERSION) { $env:PGEDGE_MCP_VERSION } else { "" }
 $script:DbHost       = $DbHost
 $script:DbPort       = $DbPort
 $script:DbName       = $DbName
@@ -94,17 +101,83 @@ function Get-Platform {
 
 # --- Get latest release version -------------------------------------------
 
-function Get-LatestVersion {
+# Does the server binary asset exist for a given tag on this platform?
+# Uses a 0-byte ranged GET (Range: bytes=0-0), matching install.sh: HEAD is
+# unreliable against GitHub's asset redirect to S3, which can reject it. Rejects
+# only on a definitive 404 — any other failure (transient network, a proxy
+# quirk) is treated as "present" so we don't wrongly skip a good release and
+# strand every Windows user.
+function Test-AssetExists {
+    param([string]$Tag)
+    $num = $Tag.TrimStart('v')
+    $asset = "pgedge-postgres-mcp-server_${num}_$($script:OS)_$($script:Arch).$($script:Ext)"
+    $url = "https://github.com/$Repo/releases/download/$Tag/$asset"
     try {
-        $release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
-        $script:Version = $release.tag_name
+        Invoke-WebRequest -Uri $url -Headers @{ Range = "bytes=0-0" } `
+            -UseBasicParsing -ErrorAction Stop | Out-Null
+        return $true
     } catch {
-        Write-Fail "Could not determine latest release version: $_"
+        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+            return $false
+        }
+        return $true
     }
-    if (-not $script:Version) {
-        Write-Fail "Could not determine latest release version"
+}
+
+# Resolve the version to install.
+#
+# We deliberately do NOT trust GitHub's /releases/latest: this repo also
+# publishes knowledge-base releases (tagged kb-YYYY-MM-DD) that carry only a
+# kb.db asset and no platform binaries. Those are not flagged as prereleases,
+# so /releases/latest can return one and the binary download 404s.
+#
+# Instead, walk the releases list newest-first and pick the first STABLE
+# software release (v<digit>…, not draft, not prerelease) that actually has a
+# server binary for this platform. A pinned version (-Version flag or
+# PGEDGE_MCP_VERSION env var) overrides everything as an escape hatch.
+function Get-LatestVersion {
+    if ($script:PinVersion) {
+        # Normalize to a v-prefixed tag so -Version 1.0.0 and -Version v1.0.0
+        # both resolve to the v1.0.0 release tag (the leading v is optional).
+        $script:VersionNum = $script:PinVersion.Trim().TrimStart('v', 'V')
+        $script:Version = "v$($script:VersionNum)"
+        Write-Info "Using pinned version $($script:Version)"
+        return
     }
-    $script:VersionNum = $script:Version.TrimStart('v')
+
+    try {
+        $releases = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=30"
+    } catch {
+        Write-Fail "Could not fetch releases from GitHub: $_"
+    }
+
+    # Stable v* releases only, ordered by semantic version (highest first).
+    # GitHub lists releases by date, not version, so a hotfix cut on an older
+    # line after a newer release would otherwise be picked ahead of it.
+    #
+    # Filter structurally on the tag, matching install.sh: reject any tag with a
+    # "-" (v1.0.0-beta3, -rc1…) rather than trusting GitHub's prerelease flag.
+    # This repo does not set that flag reliably — its beta/alpha tags are all
+    # published with prerelease=false — so the flag alone would let an RC slip
+    # through whenever a release line has no stable counterpart yet.
+    $candidates = @($releases |
+        Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '^v\d' -and $_.tag_name -notmatch '-' } |
+        ForEach-Object { $_.tag_name } |
+        Sort-Object { try { [version]($_.TrimStart('v')) } catch { [version]'0.0' } } -Descending)
+
+    if ($candidates.Count -eq 0) {
+        Write-Fail "No stable release (v*) found in the latest 30 releases"
+    }
+
+    foreach ($tag in $candidates) {
+        if (Test-AssetExists -Tag $tag) {
+            $script:Version = $tag
+            $script:VersionNum = $tag.TrimStart('v')
+            return
+        }
+    }
+
+    Write-Fail "No stable release with a $($script:OS)/$($script:Arch) binary was found (checked: $($candidates -join ', '))"
 }
 
 # --- Download and install binary ------------------------------------------
@@ -120,7 +193,17 @@ function Install-Binary {
     try {
         Invoke-WebRequest -Uri $url -OutFile (Join-Path $tmpDir $assetName) -UseBasicParsing
     } catch {
-        Write-Fail "Download failed. Check your internet connection."
+        $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+        # Write-Fail exits, so clean up the temp dir here before it does.
+        Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        if ($code -eq 403 -or $code -eq 429) {
+            Write-Fail "Download failed (HTTP $code): GitHub rate limit reached. Wait a few minutes and retry, or pin a version with -Version $($script:Version)."
+        } elseif ($code -eq 404) {
+            Write-Fail "Download failed (HTTP 404): no $($script:OS)/$($script:Arch) binary for $($script:Version) at $url"
+        } else {
+            $suffix = if ($code) { " (HTTP $code)" } else { "" }
+            Write-Fail "Download failed$suffix. Check your internet connection."
+        }
     }
 
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null

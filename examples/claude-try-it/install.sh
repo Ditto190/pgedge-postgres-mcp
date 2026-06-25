@@ -9,6 +9,10 @@
 #   curl -fsSL .../install.sh | bash -s -- --detect
 #   curl -fsSL .../install.sh | bash -s -- --db-host=localhost --db-port=5432 --db-name=mydb --db-user=me --db-pass=secret
 #
+# Pin a specific version (escape hatch — skips the latest-release lookup):
+#   curl -fsSL .../install.sh | bash -s -- --version=v1.0.0
+#   curl -fsSL .../install.sh | PGEDGE_MCP_VERSION=v1.0.0 bash   # env var equivalent
+#
 # What it does:
 #   1. Downloads the pgEdge MCP Server binary for your platform
 #   2. Helps you connect to a database (your own or a demo with sample data)
@@ -28,6 +32,8 @@ DEMO_PORT=5432
 
 MODE=""
 DB_HOST="" DB_PORT="" DB_NAME="" DB_USER="" DB_PASS=""
+# Pinned version: --version=… flag wins, else PGEDGE_MCP_VERSION env var, else empty.
+PIN_VERSION="${PGEDGE_MCP_VERSION:-}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -39,6 +45,7 @@ for arg in "$@"; do
     --db-name=*)     DB_NAME="${arg#*=}" ;;
     --db-user=*)     DB_USER="${arg#*=}" ;;
     --db-pass=*)     DB_PASS="${arg#*=}" ;;
+    --version=*)     PIN_VERSION="${arg#*=}" ;;
     --install-docker) MODE="install-docker" ;;
   esac
 done
@@ -99,13 +106,80 @@ detect_platform() {
 
 # ─── Get latest release version ─────────────────────────────────────────────
 
+# Does the server binary asset exist for a given tag on this platform?
+# Uses a 0-byte ranged GET (more reliable than HEAD against GitHub's asset
+# redirect to S3, which can reject HEAD requests). Rejects only on a definitive
+# 404 — any other outcome (a transient error, a proxy quirk) is treated as
+# "present" so we don't wrongly skip a good release.
+asset_exists_for_version() {
+  local tag="$1" num="${1#v}"
+  local asset="pgedge-postgres-mcp-server_${num}_${OS}_${ARCH}.${EXT}"
+  local url="https://github.com/$REPO/releases/download/$tag/$asset"
+  local code
+  code=$(curl -sSL -r 0-0 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null) || code=""
+  [ "$code" != "404" ]
+}
+
+# Resolve the version to install.
+#
+# We deliberately do NOT trust GitHub's /releases/latest: this repo also
+# publishes knowledge-base releases (tagged kb-YYYY-MM-DD) that carry only a
+# kb.db asset and no platform binaries. Those are not flagged as prereleases,
+# so /releases/latest can return one and the binary download 404s.
+#
+# Instead, walk the releases list newest-first and pick the first STABLE
+# software release (tag matches v<digit>… with no prerelease "-" suffix) that
+# actually has a server binary for this platform. A pinned version (--version=
+# flag or PGEDGE_MCP_VERSION env var) overrides everything as an escape hatch
+# (e.g. --version=v1.0.0).
 get_latest_version() {
+  if [ -n "$PIN_VERSION" ]; then
+    # Normalize to a v-prefixed tag so --version=1.0.0 and --version=v1.0.0
+    # both resolve to the v1.0.0 release tag (the leading v is optional).
+    VERSION_NUM="${PIN_VERSION#[vV]}"
+    VERSION="v${VERSION_NUM}"
+    info "Using pinned version $VERSION"
+    return
+  fi
+
   local response
-  response=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest") \
-    || fail "Could not fetch latest release from GitHub (network error or rate limit)"
-  VERSION=$(echo "$response" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4) || true
-  [ -z "$VERSION" ] && fail "Could not determine latest release version"
-  VERSION_NUM="${VERSION#v}"
+  response=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30") \
+    || fail "Could not fetch releases from GitHub (network error or rate limit)"
+
+  # Collect stable v* tags, newest first (GitHub returns newest first).
+  local -a candidates=()
+  local tag
+  while IFS= read -r tag; do
+    [ -z "$tag" ] && continue
+    case "$tag" in *-*) continue ;; esac   # skip prereleases (v1.0.0-beta3, -test1…)
+    candidates+=("$tag")
+  done <<< "$(echo "$response" | grep -oE '"tag_name": *"v[0-9][^"]*"' | cut -d'"' -f4)"
+
+  [ ${#candidates[@]} -eq 0 ] \
+    && fail "No stable release (v*) found in the latest 30 releases"
+
+  # Order by semantic version, highest first. GitHub lists releases by date,
+  # not version, so a hotfix cut on an older line after a newer release would
+  # otherwise be picked ahead of it. Falls back to list (date) order if this
+  # platform's sort lacks -V.
+  if echo | sort -V >/dev/null 2>&1; then
+    local -a sorted=()
+    while IFS= read -r tag; do
+      [ -n "$tag" ] && sorted+=("$tag")
+    done <<< "$(printf '%s\n' "${candidates[@]}" | sort -V -r)"
+    candidates=("${sorted[@]}")
+  fi
+
+  # Pick the highest version that actually ships a binary for this platform.
+  for tag in "${candidates[@]}"; do
+    if asset_exists_for_version "$tag"; then
+      VERSION="$tag"
+      VERSION_NUM="${VERSION#v}"
+      return
+    fi
+  done
+
+  fail "No stable release with a ${OS}/${ARCH} binary was found (checked: ${candidates[*]})"
 }
 
 # ─── Download and install binary ────────────────────────────────────────────
@@ -118,8 +192,18 @@ download_binary() {
 
   info "Downloading pgEdge MCP Server $VERSION ($OS/$ARCH)..."
 
-  curl -fsSL -o "$tmp_dir/$asset_name" "$url" \
-    || fail "Download failed. Check your internet connection."
+  local http_code
+  http_code=$(curl -sSL -o "$tmp_dir/$asset_name" -w '%{http_code}' "$url" 2>/dev/null) \
+    || http_code="000"
+  case "$http_code" in
+    2??) : ;;  # success
+    403|429) rm -rf "$tmp_dir"
+             fail "Download failed (HTTP $http_code): GitHub rate limit reached. Wait a few minutes and retry, or pin a version with --version=$VERSION." ;;
+    404)     rm -rf "$tmp_dir"
+             fail "Download failed (HTTP 404): no $OS/$ARCH binary for $VERSION at $url" ;;
+    *)       rm -rf "$tmp_dir"
+             fail "Download failed (HTTP ${http_code:-000}). Check your internet connection." ;;
+  esac
 
   mkdir -p "$BIN_DIR"
 

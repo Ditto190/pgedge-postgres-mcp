@@ -73,6 +73,7 @@ The following table lists the flags for `install.sh`:
 | `--db-name=DB` | Set the database name. |
 | `--db-user=USER` | Set the database username. |
 | `--db-pass=PASS` | Set the database password. |
+| `--version=VERSION` | Install a specific release tag (for example, `v1.0.0`) instead of resolving the latest. See [Pinning a Version](#pinning-a-version). |
 
 In the following example, the `--demo` flag starts a demo
 database without prompting:
@@ -103,6 +104,7 @@ The following table lists the flags for `install.ps1`:
 | `-DbName` | Set the database name. |
 | `-DbUser` | Set the database username. |
 | `-DbPass` | Set the database password. |
+| `-Version` | Install a specific release tag (for example, `v1.0.0`) instead of resolving the latest. See [Pinning a Version](#pinning-a-version). |
 
 In the following example, the `-Demo` flag starts a demo
 database without prompting:
@@ -117,6 +119,42 @@ to an instance on a non-default port:
 ```powershell
 .\install.ps1 -Detect -DbPort 5433
 ```
+
+## Pinning a Version
+
+By default, the installer resolves the latest stable release
+(a `v*` tag that ships a binary for your platform). To install
+a specific version instead, pin it with the `--version` flag
+(`-Version` on Windows) or the `PGEDGE_MCP_VERSION` environment
+variable. The flag takes precedence over the environment variable.
+
+Pinning skips the latest-release lookup entirely, so it is also a
+reliable fallback if release resolution ever fails.
+
+On macOS and Linux:
+
+```bash
+# Flag — note it prefixes `bash`, after `-s --`:
+curl -fsSL https://raw.githubusercontent.com/pgEdge/pgedge-postgres-mcp/main/examples/claude-try-it/install.sh | bash -s -- --version=v1.0.0
+
+# Environment variable — must prefix `bash`, not `curl`:
+curl -fsSL https://raw.githubusercontent.com/pgEdge/pgedge-postgres-mcp/main/examples/claude-try-it/install.sh | PGEDGE_MCP_VERSION=v1.0.0 bash
+```
+
+On Windows (PowerShell):
+
+```powershell
+# Flag (script saved locally):
+.\install.ps1 -Version v1.0.0
+
+# Environment variable (piped install):
+$env:PGEDGE_MCP_VERSION = "v1.0.0"
+irm https://raw.githubusercontent.com/pgEdge/pgedge-postgres-mcp/main/examples/claude-try-it/install.ps1 | iex
+```
+
+The value matches the GitHub release tag (for example, `v1.0.0`).
+A leading `v` is optional. Browse available tags on the
+[releases page](https://github.com/pgEdge/pgedge-postgres-mcp/releases).
 
 ## PostgreSQL Detection
 
