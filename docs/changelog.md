@@ -149,6 +149,15 @@ and this project adheres to
 
 ### Fixed
 
+- Metadata loader no longer emits duplicate column entries for a
+  column that participates in more than one foreign-key constraint.
+  The `fk_columns` CTE produced one row per foreign key, so the
+  downstream LEFT JOIN multiplied the per-column rows; `get_schema_info`
+  consequently listed the affected column once per foreign key. The CTE
+  now aggregates every reference into one ordered, de-duplicated array
+  per column, and `ColumnInfo.ForeignKeyRefs` is a `[]string` so all
+  references are surfaced (comma-separated in the `fk_ref` output
+  column) rather than silently discarding all but one. (#171)
 - Metadata loader now tolerates tables with zero columns
   (e.g. `CREATE TABLE foo()`). The query LEFT JOINs against the
   per-column catalog, so a zero-column table produced a row whose

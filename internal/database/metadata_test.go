@@ -12,6 +12,7 @@ package database
 
 import (
 	"database/sql"
+	"reflect"
 	"testing"
 )
 
@@ -246,7 +247,7 @@ func TestBuildTableInfo_PreservesAllColumnAttributes(t *testing.T) {
 		TypeModifier: sql.NullInt32{Int32: -1, Valid: true},
 		IsPrimaryKey: true,
 		IsUnique:     true,
-		FKReference:  "auth.tokens.user_id",
+		FKReferences: []string{"auth.tokens.user_id"},
 		IsIndexed:    true,
 		IdentityType: "a",
 		DefaultValue: "nextval('users_id_seq'::regclass)",
@@ -258,7 +259,7 @@ func TestBuildTableInfo_PreservesAllColumnAttributes(t *testing.T) {
 		Description:      "primary identifier",
 		IsPrimaryKey:     true,
 		IsUnique:         true,
-		ForeignKeyRef:    "auth.tokens.user_id",
+		ForeignKeyRefs:   []string{"auth.tokens.user_id"},
 		IsIndexed:        true,
 		IsIdentity:       "a",
 		DefaultValue:     "nextval('users_id_seq'::regclass)",
@@ -269,8 +270,31 @@ func TestBuildTableInfo_PreservesAllColumnAttributes(t *testing.T) {
 	metadata, _, _ := buildTableInfo([]metadataRow{row})
 	got := metadata["public.users"].Columns[0]
 
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("column attributes not preserved:\n got:  %+v\n want: %+v", got, want)
+	}
+}
+
+// TestBuildTableInfo_PreservesMultipleFKReferences verifies that a
+// column participating in more than one foreign key (issue #171) keeps
+// every reference, in the order the loader produced them, rather than
+// collapsing to a single value or duplicating the column.
+func TestBuildTableInfo_PreservesMultipleFKReferences(t *testing.T) {
+	row := validColumn("public", "child", "ref", "integer", "int4")
+	row.FKReferences = []string{"public.parent_a.id", "public.parent_b.id"}
+
+	metadata, _, columnCount := buildTableInfo([]metadataRow{row})
+
+	cols := metadata["public.child"].Columns
+	if len(cols) != 1 {
+		t.Fatalf("expected exactly 1 column for a multi-FK column, got %d", len(cols))
+	}
+	if columnCount != 1 {
+		t.Errorf("expected columnCount == 1, got %d", columnCount)
+	}
+	want := []string{"public.parent_a.id", "public.parent_b.id"}
+	if !reflect.DeepEqual(cols[0].ForeignKeyRefs, want) {
+		t.Errorf("FK references not preserved:\n got:  %v\n want: %v", cols[0].ForeignKeyRefs, want)
 	}
 }
 

@@ -50,7 +50,8 @@ Returns comprehensive information in TSV format (one row per column):
 - All tables and views in the database
 - Column names, data types, nullable status
 - Primary key (is_pk) and unique constraint (is_unique) indicators
-- Foreign key references (fk_ref) in format "schema.table.column"
+- Foreign key references (fk_ref) in format "schema.table.column"; a
+  column in multiple foreign keys lists each reference, comma-separated
 - Index membership (is_indexed) for query optimization hints
 - Identity columns (identity): "a" for ALWAYS, "d" for BY DEFAULT, empty if not identity
 - Default values for columns (default)
@@ -373,7 +374,7 @@ To avoid rate limits when calling this tool:
 								col.Description,
 								fmt.Sprintf("%t", col.IsPrimaryKey),
 								fmt.Sprintf("%t", col.IsUnique),
-								col.ForeignKeyRef,
+								strings.Join(col.ForeignKeyRefs, ", "),
 								fmt.Sprintf("%t", col.IsIndexed),
 								col.IsIdentity,
 								col.DefaultValue,

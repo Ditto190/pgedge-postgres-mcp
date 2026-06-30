@@ -50,10 +50,12 @@ type metadataRow struct {
 	TypeModifier  sql.NullInt32
 	IsPrimaryKey  bool
 	IsUnique      bool
-	FKReference   string
-	IsIndexed     bool
-	IdentityType  string
-	DefaultValue  string
+	// FKReferences is the text[] of "schema.table.column" references the
+	// column participates in (COALESCEd to an empty array, never NULL).
+	FKReferences []string
+	IsIndexed    bool
+	IdentityType string
+	DefaultValue string
 }
 
 // scanMetadataRow scans one row of loadMetadataSQL into a metadataRow.
@@ -76,7 +78,7 @@ func scanMetadataRow(rows pgx.Rows) (metadataRow, error) {
 		&r.TypeModifier,
 		&r.IsPrimaryKey,
 		&r.IsUnique,
-		&r.FKReference,
+		&r.FKReferences,
 		&r.IsIndexed,
 		&r.IdentityType,
 		&r.DefaultValue,
@@ -120,7 +122,7 @@ func columnInfoFromRow(r metadataRow) ColumnInfo {
 		Description:      r.ColumnDesc,
 		IsPrimaryKey:     r.IsPrimaryKey,
 		IsUnique:         r.IsUnique,
-		ForeignKeyRef:    r.FKReference,
+		ForeignKeyRefs:   r.FKReferences,
 		IsIndexed:        r.IsIndexed,
 		IsIdentity:       r.IdentityType,
 		DefaultValue:     r.DefaultValue,
