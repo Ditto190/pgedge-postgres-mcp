@@ -352,7 +352,7 @@ const ConversationPanel = ({
                                             }}
                                             disabled={disabled}
                                             sx={{
-                                                pr: 10,
+                                                pr: 13,
                                                 '&:hover': {
                                                     bgcolor: isDark ? alpha('#22B8CF', 0.08) : alpha('#15AABF', 0.06),
                                                 },
