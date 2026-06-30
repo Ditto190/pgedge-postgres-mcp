@@ -11,9 +11,10 @@
 package chat
 
 import (
+	"encoding/json"
 	"testing"
 
-	"pgedge-postgres-mcp/internal/mcp"
+	llmlib "github.com/pgEdge/pgedge-go-llm-lib/llm"
 )
 
 func TestEstimateTokens(t *testing.T) {
@@ -41,26 +42,26 @@ func TestEstimateTokens(t *testing.T) {
 func TestEstimateTotalTokens(t *testing.T) {
 	tests := []struct {
 		name     string
-		messages []Message
+		messages []llmlib.Message
 		wantMin  int // We check for minimum since estimation includes overhead
 	}{
 		{
 			name:     "empty messages",
-			messages: []Message{},
+			messages: []llmlib.Message{},
 			wantMin:  0,
 		},
 		{
 			name: "single user message",
-			messages: []Message{
-				{Role: "user", Content: "hello"},
+			messages: []llmlib.Message{
+				llmlib.UserText("hello"),
 			},
 			wantMin: 10, // 2 tokens for "hello" + 10 overhead
 		},
 		{
 			name: "multiple messages",
-			messages: []Message{
-				{Role: "user", Content: "hello"},
-				{Role: "assistant", Content: "hi there"},
+			messages: []llmlib.Message{
+				llmlib.UserText("hello"),
+				llmlib.AssistantText("hi there"),
 			},
 			wantMin: 20, // 2 + 10 + 3 + 10 = 25, but we just check minimum
 		},
@@ -303,58 +304,49 @@ func TestHasToolResults(t *testing.T) {
 
 	tests := []struct {
 		name string
-		msg  Message
+		msg  llmlib.Message
 		want bool
 	}{
 		{
-			name: "message with ToolResult slice",
-			msg: Message{
-				Role: "user",
-				Content: []ToolResult{
-					{Type: "tool_result", ToolUseID: "123", Content: "result"},
+			name: "message with tool_result block",
+			msg: llmlib.Message{
+				Role: llmlib.RoleTool,
+				Content: []llmlib.ContentBlock{
+					{Type: llmlib.BlockToolResult, ToolUseID: "123", Text: "result"},
 				},
 			},
 			want: true,
 		},
 		{
-			name: "message with interface slice containing tool_result",
-			msg: Message{
-				Role: "user",
-				Content: []interface{}{
-					map[string]interface{}{
-						"type":        "tool_result",
-						"tool_use_id": "123",
-					},
+			name: "user message with tool_result block",
+			msg: llmlib.Message{
+				Role: llmlib.RoleUser,
+				Content: []llmlib.ContentBlock{
+					{Type: llmlib.BlockToolResult, ToolUseID: "123"},
 				},
 			},
 			want: true,
 		},
 		{
-			name: "message with string content",
-			msg: Message{
-				Role:    "user",
-				Content: "hello",
-			},
+			name: "message with plain text content",
+			msg:  llmlib.UserText("hello"),
 			want: false,
 		},
 		{
-			name: "message with interface slice without tool_result",
-			msg: Message{
-				Role: "user",
-				Content: []interface{}{
-					map[string]interface{}{
-						"type": "text",
-						"text": "hello",
-					},
+			name: "message with only text blocks",
+			msg: llmlib.Message{
+				Role: llmlib.RoleUser,
+				Content: []llmlib.ContentBlock{
+					{Type: llmlib.BlockText, Text: "hello"},
 				},
 			},
 			want: false,
 		},
 		{
-			name: "message with empty ToolResult slice",
-			msg: Message{
-				Role:    "user",
-				Content: []ToolResult{},
+			name: "message with empty content",
+			msg: llmlib.Message{
+				Role:    llmlib.RoleUser,
+				Content: nil,
 			},
 			want: false,
 		},
@@ -388,38 +380,50 @@ func TestAdjustStartForToolPairs(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		messages []Message
+		messages []llmlib.Message
 		startIdx int
 		want     int
 	}{
 		{
 			name:     "startIdx 0 returns 0",
-			messages: []Message{{Role: "user", Content: "hello"}},
+			messages: []llmlib.Message{llmlib.UserText("hello")},
 			startIdx: 0,
 			want:     0,
 		},
 		{
 			name:     "startIdx 1 returns 1",
-			messages: []Message{{Role: "user", Content: "hello"}, {Role: "assistant", Content: "hi"}},
+			messages: []llmlib.Message{llmlib.UserText("hello"), llmlib.AssistantText("hi")},
 			startIdx: 1,
 			want:     1,
 		},
 		{
-			name: "user message with tool_result adjusts index",
-			messages: []Message{
-				{Role: "user", Content: "first"},
-				{Role: "assistant", Content: []interface{}{map[string]interface{}{"type": "tool_use"}}},
-				{Role: "user", Content: []ToolResult{{Type: "tool_result", ToolUseID: "123"}}},
+			name: "tool message with tool_result adjusts index",
+			messages: []llmlib.Message{
+				llmlib.UserText("first"),
+				{
+					Role: llmlib.RoleAssistant,
+					Content: []llmlib.ContentBlock{{
+						Type:    llmlib.BlockToolUse,
+						ToolUse: &llmlib.ToolUse{ID: "123", Name: "x"},
+					}},
+				},
+				{
+					Role: llmlib.RoleTool,
+					Content: []llmlib.ContentBlock{{
+						Type:      llmlib.BlockToolResult,
+						ToolUseID: "123",
+					}},
+				},
 			},
 			startIdx: 2,
 			want:     1, // Should adjust to include assistant message with tool_use
 		},
 		{
-			name: "non-user message does not adjust",
-			messages: []Message{
-				{Role: "user", Content: "first"},
-				{Role: "assistant", Content: "response"},
-				{Role: "assistant", Content: "another response"},
+			name: "non-tool-result message does not adjust",
+			messages: []llmlib.Message{
+				llmlib.UserText("first"),
+				llmlib.AssistantText("response"),
+				llmlib.AssistantText("another response"),
 			},
 			startIdx: 2,
 			want:     2,
@@ -454,36 +458,36 @@ func TestLocalCompactMessages(t *testing.T) {
 
 	tests := []struct {
 		name              string
-		messages          []Message
+		messages          []llmlib.Message
 		maxRecentMessages int
 		wantLen           int
 	}{
 		{
 			name: "single user message",
-			messages: []Message{
-				{Role: "user", Content: "hello"},
+			messages: []llmlib.Message{
+				llmlib.UserText("hello"),
 			},
 			maxRecentMessages: 5,
 			wantLen:           1,
 		},
 		{
 			name: "fewer messages than max",
-			messages: []Message{
-				{Role: "user", Content: "hello"},
-				{Role: "assistant", Content: "hi"},
+			messages: []llmlib.Message{
+				llmlib.UserText("hello"),
+				llmlib.AssistantText("hi"),
 			},
 			maxRecentMessages: 5,
 			wantLen:           2,
 		},
 		{
 			name: "keeps first user message and recent",
-			messages: []Message{
-				{Role: "user", Content: "first message"},
-				{Role: "assistant", Content: "response 1"},
-				{Role: "user", Content: "second"},
-				{Role: "assistant", Content: "response 2"},
-				{Role: "user", Content: "third"},
-				{Role: "assistant", Content: "response 3"},
+			messages: []llmlib.Message{
+				llmlib.UserText("first message"),
+				llmlib.AssistantText("response 1"),
+				llmlib.UserText("second"),
+				llmlib.AssistantText("response 2"),
+				llmlib.UserText("third"),
+				llmlib.AssistantText("response 3"),
 			},
 			maxRecentMessages: 2,
 			wantLen:           3, // first + last 2
@@ -502,24 +506,54 @@ func TestLocalCompactMessages(t *testing.T) {
 
 func TestEstimateTotalTokensWithToolContent(t *testing.T) {
 	// Test with tool result content
-	messages := []Message{
+	messages := []llmlib.Message{
 		{
-			Role: "user",
-			Content: []ToolResult{
-				{
-					Type:      "tool_result",
-					ToolUseID: "123",
-					Content: []mcp.ContentItem{
-						{Type: "text", Text: "This is the tool result"},
-					},
-				},
-			},
+			Role: llmlib.RoleTool,
+			Content: []llmlib.ContentBlock{{
+				Type:      llmlib.BlockToolResult,
+				ToolUseID: "123",
+				Text:      "This is the tool result",
+			}},
 		},
 	}
 
+	// Baseline = same structure with empty content. The tool_result
+	// text above MUST add tokens on top of the per-message overhead;
+	// if it doesn't, estimateTotalTokens is counting only the
+	// structural overhead and not the user-visible content.
+	baseline := []llmlib.Message{
+		{
+			Role: llmlib.RoleTool,
+			Content: []llmlib.ContentBlock{{
+				Type:      llmlib.BlockToolResult,
+				ToolUseID: "123",
+				Text:      "",
+			}},
+		},
+	}
+	baselineTokens := estimateTotalTokens(baseline)
 	tokens := estimateTotalTokens(messages)
-	// Should have some tokens for the content
-	if tokens < 10 {
-		t.Errorf("Expected at least 10 tokens, got %d", tokens)
+	if tokens <= baselineTokens {
+		t.Errorf("Expected tokens > baseline (%d), got %d — tool_result text is not being counted", baselineTokens, tokens)
+	}
+
+	// Tool_use input blocks should also be counted (json string length).
+	withToolUse := []llmlib.Message{{
+		Role: llmlib.RoleAssistant,
+		Content: []llmlib.ContentBlock{{
+			Type: llmlib.BlockToolUse,
+			ToolUse: &llmlib.ToolUse{
+				ID:    "tu_1",
+				Name:  "x",
+				Input: json.RawMessage(`{"a":"b"}`),
+			},
+		}},
+	}}
+	withToolUseBaseline := []llmlib.Message{{
+		Role:    llmlib.RoleAssistant,
+		Content: []llmlib.ContentBlock{{Type: llmlib.BlockToolUse, ToolUse: &llmlib.ToolUse{}}},
+	}}
+	if estimateTotalTokens(withToolUse) <= estimateTotalTokens(withToolUseBaseline) {
+		t.Errorf("Expected tool_use input length to contribute additional tokens")
 	}
 }

@@ -1,12 +1,12 @@
 /*-------------------------------------------------------------------------
-*
+ *
  * pgEdge Natural Language Agent
-*
-* Copyright (c) 2025 - 2026, pgEdge, Inc.
-* This software is released under The PostgreSQL License
-*
-*-------------------------------------------------------------------------
-*/
+ *
+ * Copyright (c) 2025 - 2026, pgEdge, Inc.
+ * This software is released under The PostgreSQL License
+ *
+ *-------------------------------------------------------------------------
+ */
 
 package chat
 
@@ -26,15 +26,30 @@ import (
 	"pgedge-postgres-mcp/internal/mcp"
 
 	"github.com/chzyer/readline"
+	llmlib "github.com/pgEdge/pgedge-go-llm-lib/llm"
+	"github.com/pgEdge/pgedge-go-llm-lib/llm/provider/anthropic"
+	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/ollama"
+	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/openai"
 )
+
+// chatLLM is the slice of llmlib.Client that the chat package
+// actually uses. Both the real library client and the test mocks
+// satisfy this small interface — defining it locally keeps the chat
+// package decoupled from the rest of the library surface (Embed,
+// Rerank, ChatStream, etc.) without re-introducing a wrapper layer.
+type chatLLM interface {
+	Chat(ctx context.Context, req llmlib.ChatRequest) (*llmlib.ChatResponse, error)
+	ListModels(ctx context.Context, opts ...llmlib.ListModelsOption) ([]string, error)
+}
 
 // Client is the main chat client
 type Client struct {
 	config                *Config
 	ui                    *UI
 	mcp                   MCPClient
-	llm                   LLMClient
-	messages              []Message
+	llm                   chatLLM
+	libTools              []llmlib.Tool
+	messages              []llmlib.Message
 	tools                 []mcp.Tool
 	resources             []mcp.Resource
 	prompts               []mcp.Prompt
@@ -95,7 +110,7 @@ func NewClient(cfg *Config, overrides *ConfigOverrides) (*Client, error) {
 	return &Client{
 		config:      cfg,
 		ui:          ui,
-		messages:    []Message{},
+		messages:    []llmlib.Message{},
 		preferences: prefs,
 	}, nil
 }
@@ -133,7 +148,7 @@ func (c *Client) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to list tools: %w", err)
 	}
-	c.tools = tools
+	c.setTools(tools)
 
 	// Get available resources
 	resources, err := c.mcp.ListResources(ctx)
@@ -360,43 +375,92 @@ func (c *Client) authenticateUser(ctx context.Context, username, password string
 	return authResult.SessionToken, nil
 }
 
+// setTools updates the MCP tool list cache and the pre-converted
+// library tool slice used in chat requests.
+func (c *Client) setTools(tools []mcp.Tool) {
+	c.tools = tools
+	c.libTools = mcpToolsToLibTools(tools)
+}
+
+// mcpToolsToLibTools converts the MCP tool descriptors into the
+// library's tool form used in llmlib.ChatRequest. The MCP InputSchema
+// is round-tripped through JSON because llmlib.Tool.InputSchema is a
+// json.RawMessage.
+func mcpToolsToLibTools(tools []mcp.Tool) []llmlib.Tool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]llmlib.Tool, 0, len(tools))
+	for _, t := range tools {
+		raw, err := json.Marshal(t.InputSchema)
+		if err != nil {
+			// Should never happen for a well-formed InputSchema;
+			// fall back to an empty object.
+			raw = []byte(`{}`)
+		}
+		out = append(out, llmlib.Tool{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: raw,
+		})
+	}
+	return out
+}
+
+// newLLMClient builds an llmlib.Client from the chat config for the
+// given provider and model. When debug is true the client's HTTP
+// traffic is logged via newTracingHTTPClient.
+func (c *Client) newLLMClient(provider, model string, debug bool) (llmlib.Client, error) {
+	opts := llmlib.Options{
+		Model:       model,
+		MaxTokens:   llmlib.Int(c.config.LLM.MaxTokens),
+		Temperature: llmlib.Float(c.config.LLM.Temperature),
+	}
+	switch provider {
+	case "anthropic":
+		opts.APIKey = c.config.LLM.AnthropicAPIKey
+		opts.BaseURL = c.config.LLM.AnthropicBaseURL
+	case "openai":
+		opts.APIKey = c.config.LLM.OpenAIAPIKey
+		opts.BaseURL = c.config.LLM.OpenAIBaseURL
+	case "ollama":
+		// Ollama has no API key. Empty BaseURL keeps the library
+		// default (http://localhost:11434).
+		opts.BaseURL = c.config.LLM.OllamaURL
+	default:
+		return nil, fmt.Errorf("unsupported LLM provider: %s", provider)
+	}
+	if debug {
+		opts.HTTPClient = newTracingHTTPClient(provider, model)
+	}
+	return llmlib.NewClient(provider, opts)
+}
+
 // initializeLLM creates the LLM client with model validation and auto-selection
 func (c *Client) initializeLLM() error {
 	provider := c.config.LLM.Provider
 
-	// Create a temporary client to query available models
-	var tempClient LLMClient
-	var clientErr error
+	// Validate provider up-front so unsupported values surface a clear
+	// error before any client construction is attempted.
 	switch provider {
-	case "anthropic":
-		tempClient, clientErr = NewAnthropicClient(
-			c.config.LLM.AnthropicAPIKey, c.config.LLM.AnthropicBaseURL, "", 0, 0, false)
-		if clientErr != nil {
-			return fmt.Errorf("failed to create Anthropic client: %w", clientErr)
-		}
-	case "openai":
-		tempClient, clientErr = NewOpenAIClient(
-			c.config.LLM.OpenAIAPIKey, c.config.LLM.OpenAIBaseURL, "", 0, 0, false)
-		if clientErr != nil {
-			return fmt.Errorf("failed to create OpenAI client: %w", clientErr)
-		}
-	case "ollama":
-		tempClient, clientErr = NewOllamaClient(
-			c.config.LLM.OllamaURL, "", false)
-		if clientErr != nil {
-			return fmt.Errorf("failed to create Ollama client: %w", clientErr)
-		}
+	case "anthropic", "openai", "ollama":
+		// ok
 	default:
 		return fmt.Errorf("unsupported LLM provider: %s", provider)
 	}
 
-	// Get available models from the provider
+	// Create a temporary client (no model selected yet) to query the
+	// provider's available models.
+	tempClient, err := c.newLLMClient(provider, "", false)
+	if err != nil {
+		return fmt.Errorf("failed to create %s client: %w", provider, err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	availableModels, err := tempClient.ListModels(ctx)
 	if err != nil {
-		// If we can't list models, log warning but continue with defaults
 		if c.config.UI.Debug {
 			fmt.Fprintf(os.Stderr, "Warning: Failed to list models from %s: %v\n", provider, err)
 		}
@@ -407,17 +471,12 @@ func (c *Client) initializeLLM() error {
 	selection := c.selectModel(provider, availableModels)
 	c.config.LLM.Model = selection.model
 
-	// Log if we used a family match (newer version of saved model)
 	if selection.usedFamilyMatch && c.config.UI.Debug {
 		savedModel := c.preferences.GetModelForProvider(provider)
 		fmt.Fprintf(os.Stderr, "[DEBUG] Model updated: %s → %s (newer version available)\n",
 			savedModel, selection.model)
 	}
 
-	// Only save preferences if:
-	// 1. There was no saved preference (first time using this provider)
-	// 2. We used a family match (update to newer version)
-	// Do NOT save if we fell back to default/first available - that would corrupt user's preference
 	shouldSave := !selection.hadSavedPref || selection.usedFamilyMatch
 	if shouldSave {
 		c.preferences.SetModelForProvider(provider, selection.model)
@@ -428,43 +487,13 @@ func (c *Client) initializeLLM() error {
 		}
 	}
 
-	// Create the actual LLM client with the selected model
-	switch provider {
-	case "anthropic":
-		c.llm, clientErr = NewAnthropicClient(
-			c.config.LLM.AnthropicAPIKey,
-			c.config.LLM.AnthropicBaseURL,
-			c.config.LLM.Model,
-			c.config.LLM.MaxTokens,
-			c.config.LLM.Temperature,
-			c.config.UI.Debug,
-		)
-		if clientErr != nil {
-			return fmt.Errorf("failed to create Anthropic client: %w", clientErr)
-		}
-	case "openai":
-		c.llm, clientErr = NewOpenAIClient(
-			c.config.LLM.OpenAIAPIKey,
-			c.config.LLM.OpenAIBaseURL,
-			c.config.LLM.Model,
-			c.config.LLM.MaxTokens,
-			c.config.LLM.Temperature,
-			c.config.UI.Debug,
-		)
-		if clientErr != nil {
-			return fmt.Errorf("failed to create OpenAI client: %w", clientErr)
-		}
-	case "ollama":
-		c.llm, clientErr = NewOllamaClient(
-			c.config.LLM.OllamaURL,
-			c.config.LLM.Model,
-			c.config.UI.Debug,
-		)
-		if clientErr != nil {
-			return fmt.Errorf("failed to create Ollama client: %w", clientErr)
-		}
+	// Build the production client with the selected model and the
+	// configured debug flag (which controls tracing).
+	client, err := c.newLLMClient(provider, c.config.LLM.Model, c.config.UI.Debug)
+	if err != nil {
+		return fmt.Errorf("failed to create %s client: %w", provider, err)
 	}
-
+	c.llm = client
 	return nil
 }
 
@@ -585,17 +614,17 @@ func getBriefDescription(desc string) string {
 
 // CompactionRequest represents a request to compact chat history.
 type CompactionRequest struct {
-	Messages     []Message `json:"messages"`
-	MaxTokens    int       `json:"max_tokens,omitempty"`
-	RecentWindow int       `json:"recent_window,omitempty"`
-	KeepAnchors  bool      `json:"keep_anchors"`
+	Messages     []llmlib.Message `json:"messages"`
+	MaxTokens    int              `json:"max_tokens,omitempty"`
+	RecentWindow int              `json:"recent_window,omitempty"`
+	KeepAnchors  bool             `json:"keep_anchors"`
 }
 
 // CompactionResponse contains the compacted messages and statistics.
 type CompactionResponse struct {
-	Messages       []Message      `json:"messages"`
-	TokenEstimate  int            `json:"token_estimate"`
-	CompactionInfo CompactionInfo `json:"compaction_info"`
+	Messages       []llmlib.Message `json:"messages"`
+	TokenEstimate  int              `json:"token_estimate"`
+	CompactionInfo CompactionInfo   `json:"compaction_info"`
 }
 
 // CompactionInfo provides statistics about the compaction operation.
@@ -619,41 +648,19 @@ func estimateTokens(text string) int {
 }
 
 // estimateTotalTokens estimates the total tokens in a message array.
-func estimateTotalTokens(messages []Message) int {
+func estimateTotalTokens(messages []llmlib.Message) int {
 	total := 0
 	for _, msg := range messages {
-		switch content := msg.Content.(type) {
-		case string:
-			total += estimateTokens(content)
-		case []interface{}:
-			// Handle tool_use and tool_result arrays
-			for _, item := range content {
-				if m, ok := item.(map[string]interface{}); ok {
-					if text, ok := m["text"].(string); ok {
-						total += estimateTokens(text)
-					}
-					if input, ok := m["input"]; ok {
-						if jsonBytes, err := json.Marshal(input); err == nil {
-							total += estimateTokens(string(jsonBytes))
-						}
-					}
-					if c, ok := m["content"]; ok {
-						if text, ok := c.(string); ok {
-							total += estimateTokens(text)
-						}
-					}
+		for _, block := range msg.Content {
+			switch block.Type {
+			case llmlib.BlockText:
+				total += estimateTokens(block.Text)
+			case llmlib.BlockToolUse:
+				if block.ToolUse != nil {
+					total += estimateTokens(string(block.ToolUse.Input))
 				}
-			}
-		case []ToolResult:
-			for _, tr := range content {
-				switch c := tr.Content.(type) {
-				case []mcp.ContentItem:
-					for _, item := range c {
-						total += estimateTokens(item.Text)
-					}
-				case string:
-					total += estimateTokens(c)
-				}
+			case llmlib.BlockToolResult:
+				total += estimateTokens(block.Text)
 			}
 		}
 		// Add overhead for message structure (~10 tokens per message)
@@ -665,7 +672,7 @@ func estimateTotalTokens(messages []Message) int {
 // compactMessages reduces the message history to prevent token overflow.
 // It tries to use the server-side smart compaction if available in HTTP mode,
 // falling back to local basic compaction if needed.
-func (c *Client) compactMessages(messages []Message) []Message {
+func (c *Client) compactMessages(messages []llmlib.Message) []llmlib.Message {
 	const maxRecentMessages = 10
 	const maxTokens = 100000
 	// Compact if estimated tokens exceed this threshold.
@@ -729,7 +736,7 @@ func (c *Client) compactMessages(messages []Message) []Message {
 }
 
 // tryServerCompaction attempts to use the server's smart compaction endpoint.
-func (c *Client) tryServerCompaction(messages []Message, maxTokens, recentWindow, minSavingsThreshold int) ([]Message, bool) {
+func (c *Client) tryServerCompaction(messages []llmlib.Message, maxTokens, recentWindow, minSavingsThreshold int) ([]llmlib.Message, bool) {
 	// Only available in HTTP mode
 	httpClient, ok := c.mcp.(*httpClient)
 	if !ok {
@@ -819,11 +826,11 @@ func (c *Client) tryServerCompaction(messages []Message, maxTokens, recentWindow
 // This preserves the original query context while maintaining recent conversation flow.
 // IMPORTANT: Ensures tool_use/tool_result message pairs are kept together to avoid
 // API errors from orphaned tool references.
-func (c *Client) localCompactMessages(messages []Message, maxRecentMessages int) []Message {
-	compacted := make([]Message, 0, maxRecentMessages+1)
+func (c *Client) localCompactMessages(messages []llmlib.Message, maxRecentMessages int) []llmlib.Message {
+	compacted := make([]llmlib.Message, 0, maxRecentMessages+1)
 
 	// Keep the first user message (original query)
-	if len(messages) > 0 && messages[0].Role == "user" {
+	if len(messages) > 0 && messages[0].Role == llmlib.RoleUser {
 		compacted = append(compacted, messages[0])
 	}
 
@@ -851,18 +858,20 @@ func (c *Client) localCompactMessages(messages []Message, maxRecentMessages int)
 // adjustStartForToolPairs adjusts the start index to ensure tool_use/tool_result
 // message pairs are kept together. If the message at startIdx contains tool_results,
 // we need to include the preceding assistant message with tool_use blocks.
-func (c *Client) adjustStartForToolPairs(messages []Message, startIdx int) int {
+func (c *Client) adjustStartForToolPairs(messages []llmlib.Message, startIdx int) int {
 	if startIdx <= 1 || startIdx >= len(messages) {
 		return startIdx
 	}
 
-	// Check if the message at startIdx is a user message with tool_results
+	// Check if the message at startIdx contains tool_results. Library
+	// tool-result messages always use RoleTool, but historically the
+	// CLI emitted them with RoleUser (for compatibility with the old
+	// Anthropic wire format). Accept both.
 	msg := messages[startIdx]
-	if msg.Role != "user" {
+	if msg.Role != llmlib.RoleUser && msg.Role != llmlib.RoleTool {
 		return startIdx
 	}
 
-	// Check if this message contains tool_result blocks
 	if c.hasToolResults(msg) {
 		// Include the preceding assistant message (which should have tool_use)
 		if startIdx > 1 {
@@ -874,24 +883,42 @@ func (c *Client) adjustStartForToolPairs(messages []Message, startIdx int) int {
 }
 
 // hasToolResults checks if a message contains tool_result blocks.
-func (c *Client) hasToolResults(msg Message) bool {
-	content, ok := msg.Content.([]ToolResult)
-	if ok && len(content) > 0 {
-		return true
-	}
-
-	// Also check for []interface{} format (from JSON unmarshaling)
-	if contentSlice, ok := msg.Content.([]interface{}); ok {
-		for _, item := range contentSlice {
-			if itemMap, ok := item.(map[string]interface{}); ok {
-				if itemType, ok := itemMap["type"].(string); ok && itemType == "tool_result" {
-					return true
-				}
-			}
+func (c *Client) hasToolResults(msg llmlib.Message) bool {
+	for _, b := range msg.Content {
+		if b.Type == llmlib.BlockToolResult {
+			return true
 		}
 	}
-
 	return false
+}
+
+// extractTextFromContent concatenates all BlockText content in a
+// message, ignoring tool_use, tool_result, image and document blocks.
+// Used by the conversation replay path which only renders text.
+func extractTextFromContent(blocks []llmlib.ContentBlock) string {
+	var parts []string
+	for _, b := range blocks {
+		if b.Type == llmlib.BlockText && b.Text != "" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// toolResultText reduces an MCP tool response payload to a single
+// string suitable for an llmlib.BlockToolResult Text field. Multiple
+// content items are joined with newlines; non-text items are skipped.
+func toolResultText(items []mcp.ContentItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, c := range items {
+		if c.Text != "" {
+			parts = append(parts, c.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (c *Client) processQuery(ctx context.Context, query string) error {
@@ -899,10 +926,7 @@ func (c *Client) processQuery(ctx context.Context, query string) error {
 
 	// Add user message to conversation history (skip if empty, used for prompts)
 	if query != "" {
-		c.messages = append(c.messages, Message{
-			Role:    "user",
-			Content: query,
-		})
+		c.messages = append(c.messages, llmlib.UserText(query))
 	}
 
 	// Create a cancellable context for this request
@@ -922,12 +946,23 @@ func (c *Client) processQuery(ctx context.Context, query string) error {
 		// Compact message history to prevent token overflow
 		compactedMessages := c.compactMessages(c.messages)
 
-		// Inform the LLM whether the database is read-only so
-		// the system prompt includes appropriate safety rules.
-		c.llm.SetReadOnlyMode(!c.currentDBWritable)
+		// Build chat request with the appropriate system prompt for
+		// the active database's read/write status. Anthropic gets
+		// both system and tool prompt-caching markers applied to the
+		// request via the provider extension helpers.
+		req := llmlib.ChatRequest{
+			Messages:     compactedMessages,
+			Tools:        c.libTools,
+			SystemPrompt: buildSystemPrompt(!c.currentDBWritable),
+		}
+		if c.config.LLM.Provider == "anthropic" {
+			req = anthropic.WithSystemCaching(req)
+			if len(c.libTools) > 0 {
+				req = anthropic.WithToolCaching(req)
+			}
+		}
 
-		// Get response from LLM with compacted history
-		response, err := c.llm.Chat(reqCtx, compactedMessages, c.tools)
+		response, err := c.llm.Chat(reqCtx, req)
 		if err != nil {
 			close(thinkingDone)
 			// Wait for ListenForEscape to restore terminal from raw mode
@@ -942,34 +977,55 @@ func (c *Client) processQuery(ctx context.Context, query string) error {
 			return fmt.Errorf("LLM error: %w", err)
 		}
 
-		// Check if LLM wants to use tools
-		if response.StopReason == "tool_use" {
-			// Extract tool uses and text content
-			var toolUses []ToolUse
-			var textParts []string
+		if c.config.UI.Debug {
+			logDebugTokens(c.config.LLM.Provider, response.Usage)
+		}
 
-			for _, item := range response.Content {
-				switch v := item.(type) {
-				case ToolUse:
-					toolUses = append(toolUses, v)
-				case TextContent:
-					_ = append(textParts, v.Text) // Not used in this context, just checking type
+		// Check if LLM wants to use tools
+		if response.StopReason == llmlib.StopReasonToolUse {
+			// Extract tool uses
+			var toolUses []llmlib.ToolUse
+			for _, block := range response.Content {
+				if block.Type == llmlib.BlockToolUse && block.ToolUse != nil {
+					toolUses = append(toolUses, *block.ToolUse)
 				}
 			}
 
 			// Add assistant's message to history
-			c.messages = append(c.messages, Message{
-				Role:    "assistant",
+			c.messages = append(c.messages, llmlib.Message{
+				Role:    llmlib.RoleAssistant,
 				Content: response.Content,
 			})
 
 			// Execute all tool calls
-			toolResults := []ToolResult{}
+			toolResultBlocks := []llmlib.ContentBlock{}
 			for _, toolUse := range toolUses {
 				close(thinkingDone)
 				// Give the thinking animation goroutine time to clear the line
 				time.Sleep(50 * time.Millisecond)
-				c.ui.PrintToolExecution(toolUse.Name, toolUse.Input)
+
+				// Decode tool input for execution and display. A malformed
+				// input is a model error — fail the tool call rather than
+				// invoking it with whatever happened to parse (or an empty
+				// object), which can do real damage with query_database.
+				input := map[string]interface{}{}
+				if len(toolUse.Input) > 0 {
+					if err := json.Unmarshal(toolUse.Input, &input); err != nil {
+						close(thinkingDone)
+						time.Sleep(50 * time.Millisecond)
+						c.ui.PrintError(fmt.Sprintf("Tool %q rejected: failed to parse input: %v", toolUse.Name, err))
+						toolResultBlocks = append(toolResultBlocks, llmlib.ToolResultBlock(
+							toolUse.ID,
+							fmt.Sprintf("Tool input failed to parse: %v. Do not retry; ask the user how to proceed.", err),
+							true,
+						))
+						thinkingDone = make(chan struct{})
+						go c.ui.ShowThinking(reqCtx, thinkingDone)
+						go ListenForEscape(ctx, thinkingDone, cancel)
+						continue
+					}
+				}
+				c.ui.PrintToolExecution(toolUse.Name, input)
 				thinkingDone = make(chan struct{})
 				go c.ui.ShowThinking(reqCtx, thinkingDone)
 				// Start new Escape listener for this tool execution
@@ -977,19 +1033,18 @@ func (c *Client) processQuery(ctx context.Context, query string) error {
 
 				// Check if this is a write query needing confirmation
 				if toolUse.Name == "query_database" && c.currentDBWritable {
-					if queryStr, ok := toolUse.Input["query"].(string); ok {
+					if queryStr, ok := input["query"].(string); ok {
 						_, isWrite := ClassifyQuery(queryStr)
 						if isWrite {
 							close(thinkingDone)
 							time.Sleep(50 * time.Millisecond)
 
 							if !c.ui.PromptWriteConfirmation(queryStr) {
-								toolResults = append(toolResults, ToolResult{
-									Type:      "tool_result",
-									ToolUseID: toolUse.ID,
-									Content:   "Query execution was declined by the user. Do not retry this query. Ask the user how they would like to proceed.",
-									IsError:   true,
-								})
+								toolResultBlocks = append(toolResultBlocks, llmlib.ToolResultBlock(
+									toolUse.ID,
+									"Query execution was declined by the user. Do not retry this query. Ask the user how they would like to proceed.",
+									true,
+								))
 								continue
 							}
 
@@ -1001,7 +1056,7 @@ func (c *Client) processQuery(ctx context.Context, query string) error {
 					}
 				}
 
-				result, err := c.mcp.CallTool(reqCtx, toolUse.Name, toolUse.Input)
+				result, err := c.mcp.CallTool(reqCtx, toolUse.Name, input)
 				if err != nil {
 					// Check if this was a user cancellation (Escape key)
 					if reqCtx.Err() == context.Canceled && ctx.Err() == nil {
@@ -1011,25 +1066,17 @@ func (c *Client) processQuery(ctx context.Context, query string) error {
 						c.ui.PrintCanceled()
 						return nil
 					}
-					toolResults = append(toolResults, ToolResult{
-						Type:      "tool_result",
-						ToolUseID: toolUse.ID,
-						Content:   fmt.Sprintf("Error: %v", err),
-						IsError:   true,
-					})
+					toolResultBlocks = append(toolResultBlocks, llmlib.ToolResultBlock(
+						toolUse.ID, fmt.Sprintf("Error: %v", err), true))
 				} else {
-					toolResults = append(toolResults, ToolResult{
-						Type:      "tool_result",
-						ToolUseID: toolUse.ID,
-						Content:   result.Content,
-						IsError:   result.IsError,
-					})
+					toolResultBlocks = append(toolResultBlocks, llmlib.ToolResultBlock(
+						toolUse.ID, toolResultText(result.Content), result.IsError))
 
 					// Refresh tool list after successful manage_connections operation
 					// This ensures we get the updated tool list when database connection changes
 					if toolUse.Name == "manage_connections" && !result.IsError {
 						if newTools, err := c.mcp.ListTools(reqCtx); err == nil {
-							c.tools = newTools
+							c.setTools(newTools)
 						}
 					}
 
@@ -1046,7 +1093,7 @@ func (c *Client) processQuery(ctx context.Context, query string) error {
 						}
 						// Refresh tools to get updated descriptions
 						if newTools, err := c.mcp.ListTools(reqCtx); err == nil {
-							c.tools = newTools
+							c.setTools(newTools)
 						}
 						// Update writable state for the new database
 						c.currentDBWritable = false
@@ -1063,9 +1110,9 @@ func (c *Client) processQuery(ctx context.Context, query string) error {
 			}
 
 			// Add tool results to conversation
-			c.messages = append(c.messages, Message{
-				Role:    "user",
-				Content: toolResults,
+			c.messages = append(c.messages, llmlib.Message{
+				Role:    llmlib.RoleTool,
+				Content: toolResultBlocks,
 			})
 
 			// Continue the loop to get final response
@@ -1077,22 +1124,11 @@ func (c *Client) processQuery(ctx context.Context, query string) error {
 		// Wait for ListenForEscape to restore terminal from raw mode
 		time.Sleep(50 * time.Millisecond)
 
-		// Extract and display text content
-		var textParts []string
-		for _, item := range response.Content {
-			if text, ok := item.(TextContent); ok {
-				textParts = append(textParts, text.Text)
-			}
-		}
-
-		finalText := strings.Join(textParts, "\n")
+		finalText := extractTextFromContent(response.Content)
 		c.ui.PrintAssistantResponse(finalText)
 
 		// Add assistant's response to history
-		c.messages = append(c.messages, Message{
-			Role:    "assistant",
-			Content: finalText,
-		})
+		c.messages = append(c.messages, llmlib.AssistantText(finalText))
 
 		return nil
 	}
@@ -1101,6 +1137,48 @@ func (c *Client) processQuery(ctx context.Context, query string) error {
 	// Wait for ListenForEscape to restore terminal from raw mode
 	time.Sleep(50 * time.Millisecond)
 	return fmt.Errorf("reached maximum number of tool calls (%d)", maxAgenticLoops)
+}
+
+// logDebugTokens prints a per-call debug line summarising the token
+// usage reported by the provider. \r\n leads to clear an in-flight
+// spinner line.
+func logDebugTokens(provider string, u llmlib.TokenUsage) {
+	pretty := providerDisplay(provider)
+	if u.CacheCreationInputTokens > 0 || u.CacheReadInputTokens > 0 {
+		percent := 0.0
+		total := u.PromptTokens + u.CacheReadInputTokens
+		if total > 0 {
+			percent = float64(u.CacheReadInputTokens) / float64(total) * 100
+		}
+		fmt.Fprintf(os.Stderr,
+			"\r\n[LLM] [DEBUG] %s - Prompt Cache: Created %d tokens, Read %d tokens (saved ~%.0f%% on input)\n",
+			pretty, u.CacheCreationInputTokens, u.CacheReadInputTokens, percent)
+	}
+	fmt.Fprintf(os.Stderr,
+		"\r[LLM] [DEBUG] %s - Tokens: Input %d, Output %d, Total %d\n",
+		pretty, u.PromptTokens, u.CompletionTokens, u.PromptTokens+u.CompletionTokens)
+}
+
+// providerDisplay returns a human-friendly capitalisation of a
+// provider name, with explicit forms for the providers we know about.
+// Unknown values fall back to a simple first-letter upper-case.
+func providerDisplay(provider string) string {
+	switch provider {
+	case "anthropic":
+		return "Anthropic"
+	case "openai":
+		return "OpenAI"
+	case "ollama":
+		return "Ollama"
+	case "gemini":
+		return "Gemini"
+	case "voyage":
+		return "Voyage"
+	}
+	if provider == "" {
+		return provider
+	}
+	return strings.ToUpper(provider[:1]) + provider[1:]
 }
 
 // SavePreferences saves the current preferences to disk

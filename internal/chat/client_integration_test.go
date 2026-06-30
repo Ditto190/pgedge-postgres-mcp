@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"pgedge-postgres-mcp/internal/mcp"
+
+	llmlib "github.com/pgEdge/pgedge-go-llm-lib/llm"
 )
 
 // mockMCPServer creates a test HTTP server that implements the MCP protocol
@@ -121,35 +123,32 @@ func mockMCPServer(t *testing.T) *httptest.Server {
 	}))
 }
 
-// mockLLMClient is a mock implementation of LLMClient for testing
+// mockLLMClient is a minimal in-memory implementation of the
+// chatLLM interface used by these integration tests. It returns
+// queued ChatResponses in order; once exhausted it returns a final
+// "end_turn" text response.
 type mockLLMClient struct {
-	responses []LLMResponse
+	responses []*llmlib.ChatResponse
 	callCount int
 }
 
-func (m *mockLLMClient) Chat(ctx context.Context, messages []Message, tools interface{}) (LLMResponse, error) {
+func (m *mockLLMClient) Chat(_ context.Context, _ llmlib.ChatRequest) (*llmlib.ChatResponse, error) {
 	if m.callCount >= len(m.responses) {
-		// Return a final text response if we run out of predefined responses
-		return LLMResponse{
-			Content: []interface{}{
-				TextContent{Type: "text", Text: "Final response"},
-			},
-			StopReason: "end_turn",
+		return &llmlib.ChatResponse{
+			Content: []llmlib.ContentBlock{{
+				Type: llmlib.BlockText,
+				Text: "Final response",
+			}},
+			StopReason: llmlib.StopReasonEndTurn,
 		}, nil
 	}
-
 	resp := m.responses[m.callCount]
 	m.callCount++
 	return resp, nil
 }
 
-func (m *mockLLMClient) ListModels(ctx context.Context) ([]string, error) {
-	// Return a static list of test models
+func (m *mockLLMClient) ListModels(_ context.Context, _ ...llmlib.ListModelsOption) ([]string, error) {
 	return []string{"test-model-1", "test-model-2", "test-model-3"}, nil
-}
-
-func (m *mockLLMClient) SetReadOnlyMode(_ bool) {
-	// No-op for testing
 }
 
 func TestClient_ConnectToMCP_HTTPMode(t *testing.T) {
@@ -475,12 +474,13 @@ func TestClient_ProcessQuery_SimpleResponse(t *testing.T) {
 
 	// Set up mock LLM client
 	mockLLM := &mockLLMClient{
-		responses: []LLMResponse{
+		responses: []*llmlib.ChatResponse{
 			{
-				Content: []interface{}{
-					TextContent{Type: "text", Text: "This is a simple response"},
-				},
-				StopReason: "end_turn",
+				Content: []llmlib.ContentBlock{{
+					Type: llmlib.BlockText,
+					Text: "This is a simple response",
+				}},
+				StopReason: llmlib.StopReasonEndTurn,
 			},
 		},
 	}
@@ -497,15 +497,15 @@ func TestClient_ProcessQuery_SimpleResponse(t *testing.T) {
 	}
 
 	// Verify user message
-	if client.messages[0].Role != "user" {
+	if client.messages[0].Role != llmlib.RoleUser {
 		t.Errorf("Expected first message role 'user', got '%s'", client.messages[0].Role)
 	}
-	if client.messages[0].Content != "What is the answer?" {
-		t.Errorf("Expected user message content 'What is the answer?', got '%v'", client.messages[0].Content)
+	if got := extractTextFromContent(client.messages[0].Content); got != "What is the answer?" {
+		t.Errorf("Expected user message text 'What is the answer?', got '%s'", got)
 	}
 
 	// Verify assistant response
-	if client.messages[1].Role != "assistant" {
+	if client.messages[1].Role != llmlib.RoleAssistant {
 		t.Errorf("Expected second message role 'assistant', got '%s'", client.messages[1].Role)
 	}
 }
@@ -557,24 +557,27 @@ func TestClient_ProcessQuery_WithToolUse(t *testing.T) {
 
 	// Set up mock LLM client with tool use
 	mockLLM := &mockLLMClient{
-		responses: []LLMResponse{
+		responses: []*llmlib.ChatResponse{
 			{
-				Content: []interface{}{
-					TextContent{Type: "text", Text: "I need to use a tool"},
-					ToolUse{
-						Type:  "tool_use",
-						ID:    "tool_1",
-						Name:  "test_tool",
-						Input: map[string]interface{}{"query": "test"},
+				Content: []llmlib.ContentBlock{
+					{Type: llmlib.BlockText, Text: "I need to use a tool"},
+					{
+						Type: llmlib.BlockToolUse,
+						ToolUse: &llmlib.ToolUse{
+							ID:    "tool_1",
+							Name:  "test_tool",
+							Input: json.RawMessage(`{"query":"test"}`),
+						},
 					},
 				},
-				StopReason: "tool_use",
+				StopReason: llmlib.StopReasonToolUse,
 			},
 			{
-				Content: []interface{}{
-					TextContent{Type: "text", Text: "Tool executed successfully"},
-				},
-				StopReason: "end_turn",
+				Content: []llmlib.ContentBlock{{
+					Type: llmlib.BlockText,
+					Text: "Tool executed successfully",
+				}},
+				StopReason: llmlib.StopReasonEndTurn,
 			},
 		},
 	}
@@ -643,20 +646,20 @@ func TestClient_ProcessQuery_MaxIterations(t *testing.T) {
 
 	// Set up mock LLM client that always returns tool_use
 	mockLLM := &mockLLMClient{
-		responses: []LLMResponse{},
+		responses: []*llmlib.ChatResponse{},
 	}
 	// Create 55 responses that all trigger tool use (more than the limit of 50)
 	for i := 0; i < 55; i++ {
-		mockLLM.responses = append(mockLLM.responses, LLMResponse{
-			Content: []interface{}{
-				ToolUse{
-					Type:  "tool_use",
+		mockLLM.responses = append(mockLLM.responses, &llmlib.ChatResponse{
+			Content: []llmlib.ContentBlock{{
+				Type: llmlib.BlockToolUse,
+				ToolUse: &llmlib.ToolUse{
 					ID:    "tool_1",
 					Name:  "test_tool",
-					Input: map[string]interface{}{"query": "test"},
+					Input: json.RawMessage(`{"query":"test"}`),
 				},
-			},
-			StopReason: "tool_use",
+			}},
+			StopReason: llmlib.StopReasonToolUse,
 		})
 	}
 	client.llm = mockLLM
@@ -718,7 +721,7 @@ func TestClient_ProcessQuery_ContextCancellation(t *testing.T) {
 
 	// Set up mock LLM client that delays
 	mockLLM := &mockLLMClient{
-		responses: []LLMResponse{},
+		responses: []*llmlib.ChatResponse{},
 	}
 	client.llm = mockLLM
 
@@ -909,26 +912,25 @@ func TestClient_ProcessQuery_ToolListRefreshAfterManageConnections(t *testing.T)
 
 	// Set up mock LLM that uses manage_connections tool
 	mockLLM := &mockLLMClient{
-		responses: []LLMResponse{
+		responses: []*llmlib.ChatResponse{
 			{
-				Content: []interface{}{
-					ToolUse{
-						Type: "tool_use",
+				Content: []llmlib.ContentBlock{{
+					Type: llmlib.BlockToolUse,
+					ToolUse: &llmlib.ToolUse{
 						ID:   "tool_1",
 						Name: "manage_connections",
-						Input: map[string]interface{}{
-							"operation":         "connect",
-							"connection_string": "postgres://test",
-						},
+						Input: json.RawMessage(
+							`{"operation":"connect","connection_string":"postgres://test"}`),
 					},
-				},
-				StopReason: "tool_use",
+				}},
+				StopReason: llmlib.StopReasonToolUse,
 			},
 			{
-				Content: []interface{}{
-					TextContent{Type: "text", Text: "Connected successfully"},
-				},
-				StopReason: "end_turn",
+				Content: []llmlib.ContentBlock{{
+					Type: llmlib.BlockText,
+					Text: "Connected successfully",
+				}},
+				StopReason: llmlib.StopReasonEndTurn,
 			},
 		},
 	}

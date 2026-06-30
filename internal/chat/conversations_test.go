@@ -17,6 +17,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	llmlib "github.com/pgEdge/pgedge-go-llm-lib/llm"
 )
 
 func TestNewConversationsClient(t *testing.T) {
@@ -150,9 +152,9 @@ func TestConversationsClient_Get(t *testing.T) {
 			Title:    "Test Conversation",
 			Provider: "anthropic",
 			Model:    "claude-3-opus",
-			Messages: []Message{
-				{Role: "user", Content: "Hello"},
-				{Role: "assistant", Content: "Hi there!"},
+			Messages: []llmlib.Message{
+				llmlib.UserText("Hello"),
+				llmlib.AssistantText("Hi there!"),
 			},
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
@@ -236,9 +238,9 @@ func TestConversationsClient_Create(t *testing.T) {
 	defer server.Close()
 
 	client := NewConversationsClient(server.URL, "test-token")
-	messages := []Message{
-		{Role: "user", Content: "Hello"},
-		{Role: "assistant", Content: "Hi!"},
+	messages := []llmlib.Message{
+		llmlib.UserText("Hello"),
+		llmlib.AssistantText("Hi!"),
 	}
 
 	conv, err := client.Create(context.Background(), "anthropic", "claude-3-opus", "mydb", messages)
@@ -275,8 +277,8 @@ func TestConversationsClient_Update(t *testing.T) {
 	defer server.Close()
 
 	client := NewConversationsClient(server.URL, "test-token")
-	messages := []Message{
-		{Role: "user", Content: "Updated message"},
+	messages := []llmlib.Message{
+		llmlib.UserText("Updated message"),
 	}
 
 	conv, err := client.Update(context.Background(), "conv_123", "anthropic", "claude-3-opus", "mydb", messages)
@@ -441,9 +443,9 @@ func TestConversationStructs(t *testing.T) {
 		Provider:   "anthropic",
 		Model:      "claude-3-opus",
 		Connection: "mydb",
-		Messages: []Message{
-			{Role: "user", Content: "Hello"},
-			{Role: "assistant", Content: "Hi!"},
+		Messages: []llmlib.Message{
+			llmlib.UserText("Hello"),
+			llmlib.AssistantText("Hi!"),
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -467,6 +469,86 @@ func TestConversationStructs(t *testing.T) {
 	}
 	if len(unmarshaled.Messages) != len(conv.Messages) {
 		t.Errorf("Messages count mismatch: got %d, want %d", len(unmarshaled.Messages), len(conv.Messages))
+	}
+}
+
+func TestConversation_UnmarshalJSON_LegacyStringContent(t *testing.T) {
+	// Pre-PR5 saves stored simple text messages as Content: <string>.
+	raw := []byte(`{
+        "id": "conv_legacy",
+        "username": "u",
+        "title": "legacy",
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi there"}
+        ],
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z"
+    }`)
+	var conv Conversation
+	if err := json.Unmarshal(raw, &conv); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(conv.Messages) != 2 {
+		t.Fatalf("want 2 messages, got %d", len(conv.Messages))
+	}
+	if conv.Messages[0].Role != llmlib.RoleUser ||
+		len(conv.Messages[0].Content) != 1 ||
+		conv.Messages[0].Content[0].Type != llmlib.BlockText ||
+		conv.Messages[0].Content[0].Text != "hello" {
+		t.Errorf("first message migrated incorrectly: %+v", conv.Messages[0])
+	}
+	if conv.Messages[1].Role != llmlib.RoleAssistant ||
+		conv.Messages[1].Content[0].Text != "hi there" {
+		t.Errorf("second message migrated incorrectly: %+v", conv.Messages[1])
+	}
+}
+
+func TestConversation_UnmarshalJSON_LegacyToolResultArray(t *testing.T) {
+	// Pre-PR5 tool-result messages used Role "user" and an array of
+	// {type:"tool_result", tool_use_id, content:[{type,text}]} blocks.
+	raw := []byte(`{
+        "id": "conv_legacy_tools",
+        "username": "u",
+        "title": "tool results",
+        "messages": [
+            {"role": "user", "content": "do it"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "tu_1", "name": "x", "input": {"q": "1"}}
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "tu_1",
+                 "content": [{"type": "text", "text": "ok"}]}
+            ]}
+        ],
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z"
+    }`)
+	var conv Conversation
+	if err := json.Unmarshal(raw, &conv); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(conv.Messages) != 3 {
+		t.Fatalf("want 3 messages, got %d", len(conv.Messages))
+	}
+	// Assistant tool-use message must keep RoleAssistant.
+	if conv.Messages[1].Role != llmlib.RoleAssistant {
+		t.Errorf("tool-use message role = %q, want assistant", conv.Messages[1].Role)
+	}
+	if conv.Messages[1].Content[0].Type != llmlib.BlockToolUse ||
+		conv.Messages[1].Content[0].ToolUse == nil ||
+		conv.Messages[1].Content[0].ToolUse.ID != "tu_1" {
+		t.Errorf("tool-use block migrated incorrectly: %+v", conv.Messages[1].Content[0])
+	}
+	// Tool-result message must be promoted to RoleTool with Text set
+	// from the legacy Content array.
+	if conv.Messages[2].Role != llmlib.RoleTool {
+		t.Errorf("tool-result role = %q, want tool", conv.Messages[2].Role)
+	}
+	if conv.Messages[2].Content[0].Type != llmlib.BlockToolResult ||
+		conv.Messages[2].Content[0].ToolUseID != "tu_1" ||
+		conv.Messages[2].Content[0].Text != "ok" {
+		t.Errorf("tool-result block migrated incorrectly: %+v", conv.Messages[2].Content[0])
 	}
 }
 

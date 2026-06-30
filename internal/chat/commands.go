@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	llmlib "github.com/pgEdge/pgedge-go-llm-lib/llm"
 )
 
 // SlashCommand represents a parsed slash command
@@ -753,16 +755,10 @@ func (c *Client) handlePromptCommand(ctx context.Context, args []string) bool {
 		switch msg.Role {
 		case "user":
 			// Add user message from prompt
-			c.messages = append(c.messages, Message{
-				Role:    "user",
-				Content: msg.Content.Text,
-			})
+			c.messages = append(c.messages, llmlib.UserText(msg.Content.Text))
 		case "assistant":
 			// Add assistant message from prompt (less common but supported)
-			c.messages = append(c.messages, Message{
-				Role:    "assistant",
-				Content: msg.Content.Text,
-			})
+			c.messages = append(c.messages, llmlib.AssistantText(msg.Content.Text))
 		}
 	}
 
@@ -946,7 +942,7 @@ func (c *Client) refreshCapabilities(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to list tools: %w", err)
 	}
-	c.tools = tools
+	c.setTools(tools)
 
 	resources, err := c.mcp.ListResources(ctx)
 	if err != nil {
@@ -1071,14 +1067,9 @@ func (c *Client) loadConversation(ctx context.Context, id string) bool {
 		return true
 	}
 
-	// Convert stored messages to client messages
-	c.messages = make([]Message, 0, len(conv.Messages))
-	for _, msg := range conv.Messages {
-		c.messages = append(c.messages, Message{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
-	}
+	// Adopt the loaded messages directly. Conversation.Load applies a
+	// legacy-format migration so the slice is always library-shaped.
+	c.messages = append([]llmlib.Message(nil), conv.Messages...)
 
 	// Update current conversation ID
 	c.currentConversationID = conv.ID
@@ -1113,6 +1104,19 @@ func (c *Client) loadConversation(ctx context.Context, id string) bool {
 				}
 			}
 		}
+
+		// Re-evaluate writable state for the restored database — the
+		// previous session's flag is stale and would otherwise drive
+		// the system prompt and write-confirmation gates.
+		c.currentDBWritable = false
+		if databases, current, err := c.mcp.ListDatabases(ctx); err == nil {
+			for _, db := range databases {
+				if db.Name == current && db.AllowWrites {
+					c.currentDBWritable = true
+					break
+				}
+			}
+		}
 	}
 
 	c.ui.PrintSystemMessage(fmt.Sprintf("Loaded conversation: %s", conv.Title))
@@ -1131,24 +1135,18 @@ func (c *Client) loadConversation(ctx context.Context, id string) bool {
 		fmt.Println()
 
 		for _, msg := range c.messages {
-			// Extract text content from the message
-			var text string
-			switch content := msg.Content.(type) {
-			case string:
-				text = content
-			default:
-				// Skip non-text messages (tool calls, tool results, etc.)
-				continue
-			}
-
+			// Extract text-only content from the message. Skip
+			// messages that have no text blocks (e.g. pure tool
+			// calls or tool results).
+			text := extractTextFromContent(msg.Content)
 			if text == "" {
 				continue
 			}
 
 			switch msg.Role {
-			case "user":
+			case llmlib.RoleUser:
 				c.ui.PrintHistoricUserMessage(text)
-			case "assistant":
+			case llmlib.RoleAssistant:
 				c.ui.PrintHistoricAssistantMessage(text)
 			}
 		}
@@ -1210,7 +1208,7 @@ func (c *Client) handleNewConversation(ctx context.Context) bool {
 	}
 
 	// Clear current conversation
-	c.messages = []Message{}
+	c.messages = []llmlib.Message{}
 	c.currentConversationID = ""
 
 	c.ui.PrintSystemMessage("Started new conversation")
