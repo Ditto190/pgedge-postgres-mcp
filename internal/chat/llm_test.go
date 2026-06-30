@@ -222,6 +222,111 @@ func TestLibClient_Chat_TranslatesToolCallResponse(t *testing.T) {
 	}
 }
 
+// TestLibClient_Chat_MultiTurnToolLoop exercises the agentic loop pattern
+// that the single-turn tests above never reach: the assistant's first
+// response (stored as LLMResponse.Content, a []interface{}) is appended to
+// the history and passed back into a second Chat call alongside the tool
+// result. Before contentToBlocks gained its []interface{} case, replaying
+// that stored assistant turn failed to translate, breaking every
+// multi-tool conversation. This test guards that path end to end.
+func TestLibClient_Chat_MultiTurnToolLoop(t *testing.T) {
+	var secondReqBody []byte
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		if callCount == 1 {
+			// Turn 1: the model asks to call a tool.
+			_, _ = w.Write([]byte(`{
+				"id":"m1","type":"message","role":"assistant",
+				"content":[
+					{"type":"text","text":"let me check"},
+					{"type":"tool_use","id":"tu_1","name":"get_weather","input":{"city":"Paris"}}
+				],
+				"stop_reason":"tool_use",
+				"usage":{"input_tokens":10,"output_tokens":5}
+			}`))
+			return
+		}
+		// Turn 2: capture what the client replayed, then give a final answer.
+		secondReqBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{
+			"id":"m2","type":"message","role":"assistant",
+			"content":[{"type":"text","text":"It is 72F and sunny in Paris."}],
+			"stop_reason":"end_turn",
+			"usage":{"input_tokens":20,"output_tokens":8}
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewAnthropicClient("test-key", server.URL, "claude-x", 4096, 0.7, false)
+	if err != nil {
+		t.Fatalf("NewAnthropicClient: %v", err)
+	}
+	ctx := context.Background()
+
+	// Turn 1: the model returns a tool_use response.
+	history := []Message{{Role: "user", Content: "weather in Paris?"}}
+	resp1, err := client.Chat(ctx, history, nil)
+	if err != nil {
+		t.Fatalf("first Chat: %v", err)
+	}
+	if resp1.StopReason != "tool_use" {
+		t.Fatalf("turn 1 stop_reason = %q, want tool_use", resp1.StopReason)
+	}
+
+	// Mirror the agentic loop in processQuery: store the assistant turn's
+	// raw []interface{} content as history, then append the tool result.
+	history = append(history, Message{Role: "assistant", Content: resp1.Content})
+
+	var toolUseID string
+	for _, item := range resp1.Content {
+		if tu, ok := item.(ToolUse); ok {
+			toolUseID = tu.ID
+		}
+	}
+	if toolUseID == "" {
+		t.Fatal("turn 1 response contained no ToolUse to replay")
+	}
+	history = append(history, Message{
+		Role: "user",
+		Content: []ToolResult{{
+			Type:      "tool_result",
+			ToolUseID: toolUseID,
+			Content:   "72F and sunny",
+		}},
+	})
+
+	// Turn 2: replay the full history. This is the call that failed before
+	// the []interface{} case was added to contentToBlocks.
+	resp2, err := client.Chat(ctx, history, nil)
+	if err != nil {
+		t.Fatalf("second Chat (history replay) failed: %v", err)
+	}
+	if resp2.StopReason != "end_turn" {
+		t.Errorf("turn 2 stop_reason = %q, want end_turn", resp2.StopReason)
+	}
+	if len(resp2.Content) != 1 {
+		t.Fatalf("turn 2 expected 1 content item, got %d", len(resp2.Content))
+	}
+	if tc, ok := resp2.Content[0].(TextContent); !ok || !strings.Contains(tc.Text, "72F") {
+		t.Errorf("turn 2 content[0] = %+v", resp2.Content[0])
+	}
+
+	// The replayed request must carry the prior assistant tool_use and the
+	// tool_result, proving the stored []interface{} content translated.
+	body := string(secondReqBody)
+	if !strings.Contains(body, "tu_1") {
+		t.Errorf("replayed request missing tool_use id tu_1; body=%s", body)
+	}
+	if !strings.Contains(body, "tool_result") {
+		t.Errorf("replayed request missing tool_result block; body=%s", body)
+	}
+	if !strings.Contains(body, "72F and sunny") {
+		t.Errorf("replayed request missing tool result content; body=%s", body)
+	}
+}
+
 func TestLibClient_Chat_PopulatesTokenUsageWhenDebug(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

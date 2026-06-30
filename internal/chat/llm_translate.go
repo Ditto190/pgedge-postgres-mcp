@@ -88,11 +88,78 @@ func contentToBlocks(content interface{}) ([]llm.ContentBlock, bool, error) {
 		}
 		return blocks, true, nil
 
+	case []interface{}:
+		// Mixed, untyped slice. This is the form an assistant turn takes
+		// once it has been stored back into the conversation history,
+		// because LLMResponse.Content is []interface{} (see
+		// fromLibContent). Every multi-turn or agentic tool conversation
+		// replays a prior assistant turn through this path, so without
+		// this case those conversations fail to translate. Dispatch on
+		// each element's concrete type via elementToBlock.
+		blocks := make([]llm.ContentBlock, 0, len(c))
+		isToolResult := false
+		for j, item := range c {
+			block, itemIsToolResult, err := elementToBlock(item)
+			if err != nil {
+				return nil, false, fmt.Errorf("element %d: %w", j, err)
+			}
+			blocks = append(blocks, block)
+			if itemIsToolResult {
+				isToolResult = true
+			}
+		}
+		return blocks, isToolResult, nil
+
 	case nil:
 		return nil, false, nil
 
 	default:
 		return nil, false, fmt.Errorf("unsupported content type %T", content)
+	}
+}
+
+// elementToBlock converts a single content element, as found inside a
+// []interface{} content slice, into one library content block. The bool
+// return indicates whether the element was a tool result, so the caller
+// can route the enclosing message to RoleTool. Elements mirror the typed
+// content the rest of the package produces: a plain string, or a
+// TextContent, ToolUse, or ToolResult value.
+func elementToBlock(item interface{}) (llm.ContentBlock, bool, error) {
+	switch v := item.(type) {
+	case string:
+		return llm.ContentBlock{Type: llm.BlockText, Text: v}, false, nil
+
+	case TextContent:
+		return llm.ContentBlock{Type: llm.BlockText, Text: v.Text}, false, nil
+
+	case ToolUse:
+		raw, err := json.Marshal(v.Input)
+		if err != nil {
+			return llm.ContentBlock{}, false, fmt.Errorf("marshal tool input: %w", err)
+		}
+		return llm.ContentBlock{
+			Type: llm.BlockToolUse,
+			ToolUse: &llm.ToolUse{
+				ID:    v.ID,
+				Name:  v.Name,
+				Input: raw,
+			},
+		}, false, nil
+
+	case ToolResult:
+		text, err := toolResultText(v.Content)
+		if err != nil {
+			return llm.ContentBlock{}, false, fmt.Errorf("tool result content: %w", err)
+		}
+		return llm.ContentBlock{
+			Type:      llm.BlockToolResult,
+			ToolUseID: v.ToolUseID,
+			Text:      text,
+			IsError:   v.IsError,
+		}, true, nil
+
+	default:
+		return llm.ContentBlock{}, false, fmt.Errorf("unsupported content type %T", item)
 	}
 }
 

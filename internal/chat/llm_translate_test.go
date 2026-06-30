@@ -123,6 +123,83 @@ func TestToLibMessages_ToolResultContent(t *testing.T) {
 	}
 }
 
+func TestToLibMessages_InterfaceSliceContent(t *testing.T) {
+	// The shape an assistant turn takes once stored back into history:
+	// LLMResponse.Content is a []interface{} of TextContent and ToolUse.
+	in := []Message{
+		{
+			Role: "assistant",
+			Content: []interface{}{
+				TextContent{Type: "text", Text: "calling tool"},
+				ToolUse{Type: "tool_use", ID: "tu_1", Name: "get_weather", Input: map[string]interface{}{"city": "Paris"}},
+			},
+		},
+	}
+	got, err := toLibMessages(in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || len(got[0].Content) != 2 {
+		t.Fatalf("expected one message with two blocks, got %+v", got)
+	}
+	if got[0].Role != llm.RoleAssistant {
+		t.Errorf("role = %q, want assistant", got[0].Role)
+	}
+	if got[0].Content[0].Type != llm.BlockText || got[0].Content[0].Text != "calling tool" {
+		t.Errorf("block[0] = %+v", got[0].Content[0])
+	}
+	block := got[0].Content[1]
+	if block.Type != llm.BlockToolUse || block.ToolUse == nil {
+		t.Fatalf("block[1] = %+v, want tool_use", block)
+	}
+	if block.ToolUse.ID != "tu_1" || block.ToolUse.Name != "get_weather" {
+		t.Errorf("toolUse = %+v", block.ToolUse)
+	}
+	var input map[string]interface{}
+	if err := json.Unmarshal(block.ToolUse.Input, &input); err != nil {
+		t.Fatalf("input unmarshal: %v", err)
+	}
+	if input["city"] != "Paris" {
+		t.Errorf("input = %+v, want city=Paris", input)
+	}
+}
+
+func TestToLibMessages_InterfaceSliceToolResultPromotesRole(t *testing.T) {
+	// A tool-result element inside a []interface{} must still route the
+	// enclosing message to RoleTool, exactly like the []ToolResult case.
+	in := []Message{
+		{
+			Role: "user",
+			Content: []interface{}{
+				ToolResult{Type: "tool_result", ToolUseID: "tu_1", Content: "72F sunny"},
+			},
+		},
+	}
+	got, err := toLibMessages(in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || len(got[0].Content) != 1 {
+		t.Fatalf("expected one message with one block, got %+v", got)
+	}
+	if got[0].Role != llm.RoleTool {
+		t.Errorf("expected RoleTool for tool-result element, got %q", got[0].Role)
+	}
+	block := got[0].Content[0]
+	if block.Type != llm.BlockToolResult || block.ToolUseID != "tu_1" || block.Text != "72F sunny" {
+		t.Errorf("block = %+v", block)
+	}
+}
+
+func TestToLibMessages_InterfaceSliceErrorsOnUnknownElement(t *testing.T) {
+	in := []Message{
+		{Role: "user", Content: []interface{}{42}},
+	}
+	if _, err := toLibMessages(in); err == nil {
+		t.Fatal("expected error for unsupported element type, got nil")
+	}
+}
+
 func TestToLibMessages_ErrorOnUnknownContent(t *testing.T) {
 	in := []Message{
 		{Role: "user", Content: 42},
