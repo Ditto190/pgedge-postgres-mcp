@@ -557,37 +557,8 @@ func TestLoadMetadata_ColumnWithMultipleFKs(t *testing.T) {
 		t.Skip("TEST_PGEDGE_POSTGRES_CONNECTION_STRING not set; skipping live-DB regression test for issue #171")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	setupPool, err := pgxpool.New(ctx, connStr)
-	if err != nil {
-		t.Fatalf("failed to open setup pool: %v", err)
-	}
-	defer setupPool.Close()
-
-	const dropStmt = "DROP TABLE IF EXISTS public.pgedge_mcp_issue171_child, " +
-		"public.pgedge_mcp_issue171_parent_a, public.pgedge_mcp_issue171_parent_b CASCADE"
-	if _, err := setupPool.Exec(ctx, dropStmt); err != nil {
-		t.Fatalf("failed to drop preexisting fixture tables: %v", err)
-	}
-	defer func() {
-		_, _ = setupPool.Exec(context.Background(), dropStmt)
-	}()
-
-	setup := []string{
-		"CREATE TABLE public.pgedge_mcp_issue171_parent_a (id integer PRIMARY KEY)",
-		"CREATE TABLE public.pgedge_mcp_issue171_parent_b (id integer PRIMARY KEY)",
-		"CREATE TABLE public.pgedge_mcp_issue171_child (" +
-			"ref integer, " +
-			"CONSTRAINT fk_a FOREIGN KEY (ref) REFERENCES public.pgedge_mcp_issue171_parent_a(id), " +
-			"CONSTRAINT fk_b FOREIGN KEY (ref) REFERENCES public.pgedge_mcp_issue171_parent_b(id))",
-	}
-	for _, stmt := range setup {
-		if _, err := setupPool.Exec(ctx, stmt); err != nil {
-			t.Fatalf("failed to create fixture (%q): %v", stmt, err)
-		}
-	}
+	cleanup := setupMultiFKFixture(t, connStr)
+	defer cleanup()
 
 	client := NewClientWithConnectionString(connStr, nil)
 	defer client.Close()
@@ -606,12 +577,7 @@ func TestLoadMetadata_ColumnWithMultipleFKs(t *testing.T) {
 		t.Fatalf("expected metadata to contain %q, got keys: %v", key, mapKeys(meta))
 	}
 
-	var refCols []ColumnInfo
-	for _, col := range tableInfo.Columns {
-		if col.ColumnName == "ref" {
-			refCols = append(refCols, col)
-		}
-	}
+	refCols := columnsNamed(tableInfo.Columns, "ref")
 	if len(refCols) != 1 {
 		t.Fatalf("expected column %q to appear exactly once, got %d (issue #171 duplicate rows)", "ref", len(refCols))
 	}
@@ -624,6 +590,57 @@ func TestLoadMetadata_ColumnWithMultipleFKs(t *testing.T) {
 		t.Errorf("expected both FK references in sorted order:\n got:  %v\n want: %v",
 			refCols[0].ForeignKeyRefs, want)
 	}
+}
+
+// setupMultiFKFixture creates a child table whose `ref` column is
+// referenced by two different parent tables (the issue #171 fixture) and
+// returns a cleanup function that drops the fixture and closes the pool.
+// It fails the test if any setup statement errors.
+func setupMultiFKFixture(t *testing.T, connStr string) func() {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
+	pool, err := pgxpool.New(ctx, connStr)
+	if err != nil {
+		cancel()
+		t.Fatalf("failed to open setup pool: %v", err)
+	}
+
+	const dropStmt = "DROP TABLE IF EXISTS public.pgedge_mcp_issue171_child, " +
+		"public.pgedge_mcp_issue171_parent_a, public.pgedge_mcp_issue171_parent_b CASCADE"
+	stmts := []string{
+		dropStmt,
+		"CREATE TABLE public.pgedge_mcp_issue171_parent_a (id integer PRIMARY KEY)",
+		"CREATE TABLE public.pgedge_mcp_issue171_parent_b (id integer PRIMARY KEY)",
+		"CREATE TABLE public.pgedge_mcp_issue171_child (" +
+			"ref integer, " +
+			"CONSTRAINT fk_a FOREIGN KEY (ref) REFERENCES public.pgedge_mcp_issue171_parent_a(id), " +
+			"CONSTRAINT fk_b FOREIGN KEY (ref) REFERENCES public.pgedge_mcp_issue171_parent_b(id))",
+	}
+	for _, stmt := range stmts {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			pool.Close()
+			cancel()
+			t.Fatalf("failed to set up fixture (%q): %v", stmt, err)
+		}
+	}
+
+	return func() {
+		_, _ = pool.Exec(context.Background(), dropStmt)
+		pool.Close()
+		cancel()
+	}
+}
+
+// columnsNamed returns the columns in cols whose name equals name.
+func columnsNamed(cols []ColumnInfo, name string) []ColumnInfo {
+	var out []ColumnInfo
+	for _, c := range cols {
+		if c.ColumnName == name {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func mapKeys(m map[string]TableInfo) []string {
