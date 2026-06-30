@@ -183,7 +183,11 @@ func HandleModels(w http.ResponseWriter, r *http.Request, config *Config) {
 			http.Error(w, "Ollama URL not configured", http.StatusBadRequest)
 			return
 		}
-		client = chat.NewOllamaClient(config.OllamaURL, config.Model, false)
+		client, clientErr = chat.NewOllamaClient(config.OllamaURL, config.Model, false)
+		if clientErr != nil {
+			http.Error(w, fmt.Sprintf("Failed to create Ollama client: %v", clientErr), http.StatusBadRequest)
+			return
+		}
 	default:
 		http.Error(w, fmt.Sprintf("Unsupported provider: %s", provider), http.StatusBadRequest)
 		return
@@ -275,7 +279,11 @@ func HandleChat(w http.ResponseWriter, r *http.Request, config *Config) {
 			http.Error(w, "Ollama URL not configured", http.StatusBadRequest)
 			return
 		}
-		client = chat.NewOllamaClient(config.OllamaURL, model, req.Debug)
+		client, clientErr = chat.NewOllamaClient(config.OllamaURL, model, req.Debug)
+		if clientErr != nil {
+			http.Error(w, fmt.Sprintf("Failed to create Ollama client: %v", clientErr), http.StatusBadRequest)
+			return
+		}
 	default:
 		http.Error(w, fmt.Sprintf("Unsupported provider: %s", provider), http.StatusBadRequest)
 		return

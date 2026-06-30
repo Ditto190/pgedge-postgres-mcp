@@ -381,8 +381,11 @@ func (c *Client) initializeLLM() error {
 			return fmt.Errorf("failed to create OpenAI client: %w", clientErr)
 		}
 	case "ollama":
-		tempClient = NewOllamaClient(
+		tempClient, clientErr = NewOllamaClient(
 			c.config.LLM.OllamaURL, "", false)
+		if clientErr != nil {
+			return fmt.Errorf("failed to create Ollama client: %w", clientErr)
+		}
 	default:
 		return fmt.Errorf("unsupported LLM provider: %s", provider)
 	}
@@ -452,11 +455,14 @@ func (c *Client) initializeLLM() error {
 			return fmt.Errorf("failed to create OpenAI client: %w", clientErr)
 		}
 	case "ollama":
-		c.llm = NewOllamaClient(
+		c.llm, clientErr = NewOllamaClient(
 			c.config.LLM.OllamaURL,
 			c.config.LLM.Model,
 			c.config.UI.Debug,
 		)
+		if clientErr != nil {
+			return fmt.Errorf("failed to create Ollama client: %w", clientErr)
+		}
 	}
 
 	return nil

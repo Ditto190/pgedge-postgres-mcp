@@ -13,1012 +13,465 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"pgedge-postgres-mcp/internal/mcp"
 )
 
-func TestAnthropicClient_TextResponse(t *testing.T) {
-	// Create test server
+// --- libClient wrapper tests (Task 4) ---------------------------------
+
+func TestLibClient_Chat_RoundTrip(t *testing.T) {
+	// Fake Anthropic server.
+	var gotReqBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify request
-		var req anthropicRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("Failed to decode request: %v", err)
-		}
-
-		// Verify API key header
-		apiKey := r.Header.Get("x-api-key")
-		if apiKey != "test-key" {
-			t.Errorf("Expected API key 'test-key', got '%s'", apiKey)
-		}
-
-		// Send response
-		resp := anthropicResponse{
-			ID:   "msg_test",
-			Type: "message",
-			Role: "assistant",
-			Content: []map[string]interface{}{
-				{
-					"type": "text",
-					"text": "This is a test response",
-				},
-			},
-			StopReason: "end_turn",
-		}
-
+		gotReqBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_, _ = w.Write([]byte(`{
+			"id":"msg_1","type":"message","role":"assistant",
+			"content":[{"type":"text","text":"hi back"}],
+			"stop_reason":"end_turn",
+			"usage":{"input_tokens":10,"output_tokens":5}
+		}`))
 	}))
 	defer server.Close()
 
-	// Create client with test server URL
-	client := &anthropicClient{
-		apiKey: "test-key",
-		model:  "claude-test",
-	}
-
-	// Since we can't easily override the URL, we'll just verify the client was created correctly
-	if client.apiKey != "test-key" {
-		t.Errorf("Expected API key 'test-key', got '%s'", client.apiKey)
-	}
-	if client.model != "claude-test" {
-		t.Errorf("Expected model 'claude-test', got '%s'", client.model)
-	}
-
-	// In a real test, we'd call client.Chat(ctx, messages, tools)
-	// but since we can't override the URL easily without refactoring,
-	// we'll skip that for now
-	_, _ = server, client // Suppress unused warnings
-}
-
-func TestOllamaClient_ToolCall(t *testing.T) {
-	// Create test server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify request
-		var req ollamaRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("Failed to decode request: %v", err)
-		}
-
-		if req.Model != "test-model" {
-			t.Errorf("Expected model 'test-model', got '%s'", req.Model)
-		}
-
-		// Send tool call response
-		resp := ollamaResponse{
-			Model: "test-model",
-			Message: ollamaMessage{
-				Role:    "assistant",
-				Content: `{"tool": "test_tool", "arguments": {"param": "value"}}`,
-			},
-			Done: true,
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	// Create client
-	client := NewOllamaClient(server.URL, "test-model", false)
-
-	// Test tool call
-	ctx := context.Background()
-	messages := []Message{
-		{
-			Role:    "user",
-			Content: "Execute test tool",
-		},
-	}
-	tools := []mcp.Tool{
-		{
-			Name:        "test_tool",
-			Description: "A test tool",
-			InputSchema: mcp.InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"param": map[string]interface{}{
-						"type":        "string",
-						"description": "A parameter",
-					},
-				},
-			},
-		},
-	}
-
-	response, err := client.Chat(ctx, messages, tools)
+	client, err := NewAnthropicClient("test-key", server.URL, "claude-x", 4096, 0.7, false)
 	if err != nil {
-		t.Fatalf("Chat failed: %v", err)
+		t.Fatalf("NewAnthropicClient: %v", err)
 	}
 
-	if response.StopReason != "tool_use" {
-		t.Errorf("Expected stop reason 'tool_use', got '%s'", response.StopReason)
+	resp, err := client.Chat(context.Background(),
+		[]Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
 	}
 
-	if len(response.Content) != 1 {
-		t.Fatalf("Expected 1 content item, got %d", len(response.Content))
+	if len(gotReqBody) == 0 {
+		t.Fatal("server received no request body")
 	}
-
-	toolUse, ok := response.Content[0].(ToolUse)
+	if len(resp.Content) != 1 {
+		t.Fatalf("expected 1 content item, got %d", len(resp.Content))
+	}
+	tc, ok := resp.Content[0].(TextContent)
 	if !ok {
-		t.Fatalf("Expected ToolUse, got %T", response.Content[0])
+		t.Fatalf("expected TextContent, got %T", resp.Content[0])
 	}
-
-	if toolUse.Name != "test_tool" {
-		t.Errorf("Expected tool name 'test_tool', got '%s'", toolUse.Name)
+	if tc.Text != "hi back" {
+		t.Errorf("text = %q", tc.Text)
+	}
+	if resp.StopReason != "end_turn" {
+		t.Errorf("stop_reason = %q", resp.StopReason)
 	}
 }
 
-func TestOllamaClient_TextResponse(t *testing.T) {
-	// Create test server
+func TestLibClient_Chat_InjectsSystemPrompt(t *testing.T) {
+	var gotReq struct {
+		System []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"system"`
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Send text response
-		resp := ollamaResponse{
-			Model: "test-model",
-			Message: ollamaMessage{
-				Role:    "assistant",
-				Content: "This is a plain text response",
-			},
-			Done: true,
-		}
-
+		_ = json.NewDecoder(r.Body).Decode(&gotReq)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_, _ = w.Write([]byte(`{"id":"m","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
 	}))
 	defer server.Close()
 
-	// Create client
-	client := NewOllamaClient(server.URL, "test-model", false)
-
-	// Test text response
-	ctx := context.Background()
-	messages := []Message{
-		{
-			Role:    "user",
-			Content: "Hello",
-		},
-	}
-	tools := []mcp.Tool{}
-
-	response, err := client.Chat(ctx, messages, tools)
+	client, err := NewAnthropicClient("test-key", server.URL, "claude-x", 4096, 0.7, false)
 	if err != nil {
-		t.Fatalf("Chat failed: %v", err)
+		t.Fatalf("NewAnthropicClient: %v", err)
 	}
+	_, _ = client.Chat(context.Background(),
+		[]Message{{Role: "user", Content: "hi"}}, nil)
 
-	if response.StopReason != "end_turn" {
-		t.Errorf("Expected stop reason 'end_turn', got '%s'", response.StopReason)
+	if len(gotReq.System) == 0 {
+		t.Fatal("expected system prompt to be sent")
 	}
-
-	if len(response.Content) != 1 {
-		t.Fatalf("Expected 1 content item, got %d", len(response.Content))
+	if !strings.Contains(gotReq.System[0].Text, "PostgreSQL") {
+		t.Errorf("system prompt missing expected text; got %q", gotReq.System[0].Text)
 	}
-
-	textContent, ok := response.Content[0].(TextContent)
-	if !ok {
-		t.Fatalf("Expected TextContent, got %T", response.Content[0])
-	}
-
-	if textContent.Text != "This is a plain text response" {
-		t.Errorf("Expected text 'This is a plain text response', got '%s'", textContent.Text)
+	if strings.Contains(gotReq.System[0].Text, "READ-ONLY mode") {
+		t.Error("system prompt unexpectedly contains read-only safety text")
 	}
 }
 
-func TestOllamaClient_NativeToolCall(t *testing.T) {
-	// Create test server that returns native tool calls
+func TestLibClient_Chat_AppliesSystemCachingForAnthropic(t *testing.T) {
+	var gotReq struct {
+		System []struct {
+			Type         string `json:"type"`
+			Text         string `json:"text"`
+			CacheControl *struct {
+				Type string `json:"type"`
+			} `json:"cache_control,omitempty"`
+		} `json:"system"`
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify the request includes native tools
-		var req ollamaRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("Failed to decode request: %v", err)
-		}
-
-		if len(req.Tools) == 0 {
-			t.Fatal("Expected tools in request")
-		}
-
-		if req.Tools[0].Type != "function" {
-			t.Errorf("Expected tool type 'function', got '%s'", req.Tools[0].Type)
-		}
-
-		if req.Tools[0].Function.Name != "test_tool" {
-			t.Errorf("Expected tool name 'test_tool', got '%s'", req.Tools[0].Function.Name)
-		}
-
-		// Send native tool call response
-		resp := ollamaResponse{
-			Model: "test-model",
-			Message: ollamaMessage{
-				Role:    "assistant",
-				Content: "",
-				ToolCalls: []ollamaToolCall{
-					{
-						Function: ollamaToolCallFunction{
-							Name: "test_tool",
-							Arguments: map[string]interface{}{
-								"param": "value",
-							},
-						},
-					},
-				},
-			},
-			Done: true,
-		}
-
+		_ = json.NewDecoder(r.Body).Decode(&gotReq)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_, _ = w.Write([]byte(`{"id":"m","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
 	}))
 	defer server.Close()
 
-	// Create client
-	client := NewOllamaClient(server.URL, "test-model", false)
-
-	// Test native tool call
-	ctx := context.Background()
-	messages := []Message{
-		{
-			Role:    "user",
-			Content: "Execute test tool",
-		},
-	}
-	tools := []mcp.Tool{
-		{
-			Name:        "test_tool",
-			Description: "A test tool",
-			InputSchema: mcp.InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"param": map[string]interface{}{
-						"type":        "string",
-						"description": "A parameter",
-					},
-				},
-				Required: []string{"param"},
-			},
-		},
-	}
-
-	response, err := client.Chat(ctx, messages, tools)
+	client, err := NewAnthropicClient("test-key", server.URL, "claude-x", 4096, 0.7, false)
 	if err != nil {
-		t.Fatalf("Chat failed: %v", err)
+		t.Fatalf("NewAnthropicClient: %v", err)
 	}
+	_, _ = client.Chat(context.Background(),
+		[]Message{{Role: "user", Content: "hi"}}, nil)
 
-	if response.StopReason != "tool_use" {
-		t.Errorf("Expected stop reason 'tool_use', got '%s'", response.StopReason)
+	if len(gotReq.System) == 0 {
+		t.Fatal("expected at least one system block")
 	}
-
-	if len(response.Content) != 1 {
-		t.Fatalf("Expected 1 content item, got %d", len(response.Content))
+	last := gotReq.System[len(gotReq.System)-1]
+	if last.CacheControl == nil {
+		t.Fatalf("expected cache_control on the last system block; got %+v", last)
 	}
-
-	toolUse, ok := response.Content[0].(ToolUse)
-	if !ok {
-		t.Fatalf("Expected ToolUse, got %T", response.Content[0])
-	}
-
-	if toolUse.Name != "test_tool" {
-		t.Errorf("Expected tool name 'test_tool', got '%s'", toolUse.Name)
-	}
-
-	if toolUse.ID != "ollama-tool-1-1" {
-		t.Errorf("Expected tool ID 'ollama-tool-1-1', got '%s'", toolUse.ID)
-	}
-
-	paramVal, ok := toolUse.Input["param"].(string)
-	if !ok || paramVal != "value" {
-		t.Errorf("Expected param='value', got %v", toolUse.Input["param"])
+	if last.CacheControl.Type != "ephemeral" {
+		t.Errorf("cache_control.type = %q, want ephemeral", last.CacheControl.Type)
 	}
 }
 
-func TestOllamaClient_ToolResultMessages(t *testing.T) {
-	// Test that []ToolResult messages are correctly included in Ollama requests
+func TestLibClient_Chat_AppendsReadOnlyPromptWhenSet(t *testing.T) {
+	var gotReq struct {
+		System []struct {
+			Text string `json:"text"`
+		} `json:"system"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotReq)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"m","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewAnthropicClient("test-key", server.URL, "claude-x", 4096, 0.7, false)
+	if err != nil {
+		t.Fatalf("NewAnthropicClient: %v", err)
+	}
+	client.SetReadOnlyMode(true)
+	_, _ = client.Chat(context.Background(),
+		[]Message{{Role: "user", Content: "hi"}}, nil)
+
+	if len(gotReq.System) == 0 || !strings.Contains(gotReq.System[0].Text, "READ-ONLY mode") {
+		t.Errorf("expected read-only safety prompt in system text; got %+v", gotReq.System)
+	}
+}
+
+func TestLibClient_Chat_ReturnsErrorFromUpstream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewAnthropicClient("test-key", server.URL, "claude-x", 4096, 0.7, false)
+	if err != nil {
+		t.Fatalf("NewAnthropicClient: %v", err)
+	}
+	_, err = client.Chat(context.Background(),
+		[]Message{{Role: "user", Content: "hi"}}, nil)
+	if err == nil {
+		t.Fatal("expected upstream error to surface, got nil")
+	}
+}
+
+func TestLibClient_Chat_TranslatesToolCallResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"m","type":"message","role":"assistant",
+			"content":[
+				{"type":"text","text":"calling tool"},
+				{"type":"tool_use","id":"tu_1","name":"get_weather","input":{"city":"Paris"}}
+			],
+			"stop_reason":"tool_use",
+			"usage":{"input_tokens":10,"output_tokens":5}
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewAnthropicClient("test-key", server.URL, "claude-x", 4096, 0.7, false)
+	if err != nil {
+		t.Fatalf("NewAnthropicClient: %v", err)
+	}
+	resp, err := client.Chat(context.Background(),
+		[]Message{{Role: "user", Content: "weather?"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	if len(resp.Content) != 2 {
+		t.Fatalf("expected 2 content items, got %d", len(resp.Content))
+	}
+	tc, ok := resp.Content[0].(TextContent)
+	if !ok || tc.Text != "calling tool" {
+		t.Errorf("content[0] = %+v", resp.Content[0])
+	}
+	tu, ok := resp.Content[1].(ToolUse)
+	if !ok {
+		t.Fatalf("content[1] = %T (want ToolUse)", resp.Content[1])
+	}
+	if tu.ID != "tu_1" || tu.Name != "get_weather" || tu.Input["city"] != "Paris" {
+		t.Errorf("tool = %+v", tu)
+	}
+	if resp.StopReason != "tool_use" {
+		t.Errorf("stop_reason = %q", resp.StopReason)
+	}
+}
+
+// TestLibClient_Chat_MultiTurnToolLoop exercises the agentic loop pattern
+// that the single-turn tests above never reach: the assistant's first
+// response (stored as LLMResponse.Content, a []interface{}) is appended to
+// the history and passed back into a second Chat call alongside the tool
+// result. Before contentToBlocks gained its []interface{} case, replaying
+// that stored assistant turn failed to translate, breaking every
+// multi-tool conversation. This test guards that path end to end.
+func TestLibClient_Chat_MultiTurnToolLoop(t *testing.T) {
+	var secondReqBody []byte
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req ollamaRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("Failed to decode request: %v", err)
-		}
-
 		callCount++
+		w.Header().Set("Content-Type", "application/json")
 		if callCount == 1 {
-			// First call: return a tool call
-			resp := ollamaResponse{
-				Model: "test-model",
-				Message: ollamaMessage{
-					Role:    "assistant",
-					Content: "",
-					ToolCalls: []ollamaToolCall{
-						{
-							Function: ollamaToolCallFunction{
-								Name:      "get_schema_info",
-								Arguments: map[string]interface{}{},
-							},
-						},
-					},
-				},
-				Done: true,
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
-		} else {
-			// Second call: verify tool result messages are present
-			foundToolMsg := false
-			for _, msg := range req.Messages {
-				if msg.Role == "tool" {
-					foundToolMsg = true
-					if msg.Content == "" {
-						t.Error("Tool message has empty content")
-					}
-					if msg.ToolName != "get_schema_info" {
-						t.Errorf("Expected tool_name 'get_schema_info', got '%s'", msg.ToolName)
-					}
-				}
-			}
-			if !foundToolMsg {
-				t.Error("Expected tool result message in second request, but none found")
-			}
-
-			// Return a text response
-			resp := ollamaResponse{
-				Model: "test-model",
-				Message: ollamaMessage{
-					Role:    "assistant",
-					Content: "Here are the tables in your database.",
-				},
-				Done: true,
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			// Turn 1: the model asks to call a tool.
+			_, _ = w.Write([]byte(`{
+				"id":"m1","type":"message","role":"assistant",
+				"content":[
+					{"type":"text","text":"let me check"},
+					{"type":"tool_use","id":"tu_1","name":"get_weather","input":{"city":"Paris"}}
+				],
+				"stop_reason":"tool_use",
+				"usage":{"input_tokens":10,"output_tokens":5}
+			}`))
+			return
 		}
+		// Turn 2: capture what the client replayed, then give a final answer.
+		secondReqBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{
+			"id":"m2","type":"message","role":"assistant",
+			"content":[{"type":"text","text":"It is 72F and sunny in Paris."}],
+			"stop_reason":"end_turn",
+			"usage":{"input_tokens":20,"output_tokens":8}
+		}`))
 	}))
 	defer server.Close()
 
-	client := NewOllamaClient(server.URL, "test-model", false)
+	client, err := NewAnthropicClient("test-key", server.URL, "claude-x", 4096, 0.7, false)
+	if err != nil {
+		t.Fatalf("NewAnthropicClient: %v", err)
+	}
 	ctx := context.Background()
 
-	tools := []mcp.Tool{
-		{
-			Name:        "get_schema_info",
-			Description: "Get schema info",
-			InputSchema: mcp.InputSchema{Type: "object"},
-		},
-	}
-
-	// First call: should return tool use
-	messages := []Message{
-		{Role: "user", Content: "list tables"},
-	}
-	resp1, err := client.Chat(ctx, messages, tools)
+	// Turn 1: the model returns a tool_use response.
+	history := []Message{{Role: "user", Content: "weather in Paris?"}}
+	resp1, err := client.Chat(ctx, history, nil)
 	if err != nil {
-		t.Fatalf("First chat call failed: %v", err)
+		t.Fatalf("first Chat: %v", err)
 	}
 	if resp1.StopReason != "tool_use" {
-		t.Fatalf("Expected tool_use, got %s", resp1.StopReason)
+		t.Fatalf("turn 1 stop_reason = %q, want tool_use", resp1.StopReason)
 	}
 
-	// Build messages with []ToolResult (as client.go does)
-	messages = append(messages, Message{
-		Role:    "assistant",
-		Content: resp1.Content,
-	})
-	messages = append(messages, Message{
+	// Mirror the agentic loop in processQuery: store the assistant turn's
+	// raw []interface{} content as history, then append the tool result.
+	history = append(history, Message{Role: "assistant", Content: resp1.Content})
+
+	var toolUseID string
+	for _, item := range resp1.Content {
+		if tu, ok := item.(ToolUse); ok {
+			toolUseID = tu.ID
+		}
+	}
+	if toolUseID == "" {
+		t.Fatal("turn 1 response contained no ToolUse to replay")
+	}
+	history = append(history, Message{
 		Role: "user",
-		Content: []ToolResult{
-			{
-				Type:      "tool_result",
-				ToolUseID: "ollama-tool-1-1",
-				Content:   "tables: users, orders, products",
-			},
-		},
+		Content: []ToolResult{{
+			Type:      "tool_result",
+			ToolUseID: toolUseID,
+			Content:   "72F and sunny",
+		}},
 	})
 
-	// Second call: should include tool results and return text
-	resp2, err := client.Chat(ctx, messages, tools)
+	// Turn 2: replay the full history. This is the call that failed before
+	// the []interface{} case was added to contentToBlocks.
+	resp2, err := client.Chat(ctx, history, nil)
 	if err != nil {
-		t.Fatalf("Second chat call failed: %v", err)
+		t.Fatalf("second Chat (history replay) failed: %v", err)
 	}
 	if resp2.StopReason != "end_turn" {
-		t.Fatalf("Expected end_turn, got %s", resp2.StopReason)
+		t.Errorf("turn 2 stop_reason = %q, want end_turn", resp2.StopReason)
+	}
+	if len(resp2.Content) != 1 {
+		t.Fatalf("turn 2 expected 1 content item, got %d", len(resp2.Content))
+	}
+	if tc, ok := resp2.Content[0].(TextContent); !ok || !strings.Contains(tc.Text, "72F") {
+		t.Errorf("turn 2 content[0] = %+v", resp2.Content[0])
 	}
 
-	if len(resp2.Content) == 0 {
-		t.Fatal("Expected at least 1 content item in second response")
+	// The replayed request must carry the prior assistant tool_use and the
+	// tool_result, proving the stored []interface{} content translated.
+	body := string(secondReqBody)
+	if !strings.Contains(body, "tu_1") {
+		t.Errorf("replayed request missing tool_use id tu_1; body=%s", body)
 	}
-	textContent, ok := resp2.Content[0].(TextContent)
-	if !ok {
-		t.Fatalf("Expected TextContent, got %T", resp2.Content[0])
+	if !strings.Contains(body, "tool_result") {
+		t.Errorf("replayed request missing tool_result block; body=%s", body)
 	}
-	if textContent.Text == "" {
-		t.Error("Expected non-empty text response after tool results")
+	if !strings.Contains(body, "72F and sunny") {
+		t.Errorf("replayed request missing tool result content; body=%s", body)
 	}
 }
 
-func TestExtractAnthropicErrorMessage(t *testing.T) {
-	tests := []struct {
-		name       string
-		statusCode int
-		body       string
-		want       string
-	}{
-		{
-			name:       "Rate limit error",
-			statusCode: 429,
-			body:       `{"type":"error","error":{"type":"rate_limit_error","message":"You have exceeded your rate limit. Please wait before trying again."}}`,
-			want:       "API error (429): You have exceeded your rate limit. Please wait before trying again.",
-		},
-		{
-			name:       "Authentication error",
-			statusCode: 401,
-			body:       `{"type":"error","error":{"type":"authentication_error","message":"Invalid API key provided"}}`,
-			want:       "API error (401): Invalid API key provided",
-		},
-		{
-			name:       "Generic error with no JSON",
-			statusCode: 500,
-			body:       `Internal Server Error`,
-			want:       "API error (500): Internal Server Error",
-		},
-		{
-			name:       "Malformed JSON",
-			statusCode: 400,
-			body:       `{invalid json}`,
-			want:       "API error (400): {invalid json}",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractAnthropicErrorMessage(tt.statusCode, []byte(tt.body))
-			if got != tt.want {
-				t.Errorf("extractAnthropicErrorMessage() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestExtractOllamaErrorMessage(t *testing.T) {
-	tests := []struct {
-		name         string
-		statusCode   int
-		body         string
-		wantContains string
-	}{
-		{
-			name:         "Model not found error",
-			statusCode:   404,
-			body:         `{"error":"model not found"}`,
-			wantContains: "model not found",
-		},
-		{
-			name:         "Generic error",
-			statusCode:   500,
-			body:         `{"error":"internal server error"}`,
-			wantContains: "internal server error",
-		},
-		{
-			name:         "Non-JSON error",
-			statusCode:   503,
-			body:         `Service Unavailable`,
-			wantContains: "Service Unavailable",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractOllamaErrorMessage(tt.statusCode, []byte(tt.body))
-			if !strings.Contains(got, tt.wantContains) {
-				t.Errorf("extractOllamaErrorMessage() = %v, want to contain %v", got, tt.wantContains)
-			}
-		})
-	}
-}
-
-func TestOpenAIClient_TextResponse(t *testing.T) {
-	// Create test server
+func TestLibClient_Chat_PopulatesTokenUsageWhenDebug(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify request
-		var req openaiRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("Failed to decode request: %v", err)
-		}
-
-		// Verify API key header
-		apiKey := r.Header.Get("Authorization")
-		if apiKey != "Bearer test-key" {
-			t.Errorf("Expected Authorization header 'Bearer test-key', got '%s'", apiKey)
-		}
-
-		// Send response
-		resp := openaiResponse{
-			ID:      "chatcmpl-test",
-			Object:  "chat.completion",
-			Model:   "gpt-4o",
-			Created: 1234567890,
-			Choices: []openaiChoice{
-				{
-					Index: 0,
-					Message: openaiMessage{
-						Role:    "assistant",
-						Content: "This is a test response from OpenAI",
-					},
-					FinishReason: "stop",
-				},
-			},
-			Usage: openaiUsage{
-				PromptTokens:     10,
-				CompletionTokens: 15,
-				TotalTokens:      25,
-			},
-		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_, _ = w.Write([]byte(`{
+			"id":"m","type":"message","role":"assistant",
+			"content":[{"type":"text","text":"x"}],
+			"stop_reason":"end_turn",
+			"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":80}
+		}`))
 	}))
 	defer server.Close()
 
-	// Create client with test server URL
-	client := &openaiClient{
-		apiKey: "test-key",
-		model:  "gpt-4o",
+	client, err := NewAnthropicClient("test-key", server.URL, "claude-x", 4096, 0.7, true)
+	if err != nil {
+		t.Fatalf("NewAnthropicClient: %v", err)
+	}
+	resp, err := client.Chat(context.Background(),
+		[]Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
 	}
 
-	// Verify client properties
-	if client.apiKey != "test-key" {
-		t.Errorf("Expected API key 'test-key', got '%s'", client.apiKey)
+	if resp.TokenUsage == nil {
+		t.Fatal("expected TokenUsage when debug=true")
 	}
-	if client.model != "gpt-4o" {
-		t.Errorf("Expected model 'gpt-4o', got '%s'", client.model)
+	if resp.TokenUsage.PromptTokens != 100 || resp.TokenUsage.CompletionTokens != 50 {
+		t.Errorf("usage = %+v", resp.TokenUsage)
+	}
+	if resp.TokenUsage.CacheReadTokens != 80 {
+		t.Errorf("cache_read = %d", resp.TokenUsage.CacheReadTokens)
+	}
+	if resp.TokenUsage.Provider != "anthropic" {
+		t.Errorf("provider = %q", resp.TokenUsage.Provider)
 	}
 }
 
-func TestOpenAIClient_ToolCall(t *testing.T) {
-	// Create test server
+func TestLibClient_Chat_NoTokenUsageWhenNotDebug(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify request
-		var req openaiRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("Failed to decode request: %v", err)
-		}
-
-		// Verify tools are formatted correctly
-		if req.Tools == nil {
-			t.Error("Expected tools in request")
-		} else if tools, ok := req.Tools.([]map[string]interface{}); !ok || len(tools) == 0 {
-			t.Error("Expected non-empty tools array in request")
-		}
-
-		// Send tool call response
-		resp := openaiResponse{
-			ID:      "chatcmpl-test",
-			Object:  "chat.completion",
-			Model:   "gpt-4o",
-			Created: 1234567890,
-			Choices: []openaiChoice{
-				{
-					Index: 0,
-					Message: openaiMessage{
-						Role: "assistant",
-						ToolCalls: []map[string]interface{}{
-							{
-								"id":   "call_test123",
-								"type": "function",
-								"function": map[string]interface{}{
-									"name":      "test_tool",
-									"arguments": `{"param": "value"}`,
-								},
-							},
-						},
-					},
-					FinishReason: "tool_calls",
-				},
-			},
-			Usage: openaiUsage{
-				PromptTokens:     10,
-				CompletionTokens: 5,
-				TotalTokens:      15,
-			},
-		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_, _ = w.Write([]byte(`{"id":"m","type":"message","role":"assistant","content":[{"type":"text","text":"x"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
 	}))
 	defer server.Close()
 
-	// Create client - we'll test the request/response structures
-	client := &openaiClient{
-		apiKey: "test-key",
+	client, err := NewAnthropicClient("test-key", server.URL, "claude-x", 4096, 0.7, false)
+	if err != nil {
+		t.Fatalf("NewAnthropicClient: %v", err)
 	}
-
-	// Verify client was created
-	if client.apiKey != "test-key" {
-		t.Errorf("Expected API key 'test-key', got '%s'", client.apiKey)
+	resp, err := client.Chat(context.Background(),
+		[]Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
 	}
-}
-
-func TestExtractOpenAIErrorMessage(t *testing.T) {
-	tests := []struct {
-		name       string
-		statusCode int
-		body       string
-		want       string
-	}{
-		{
-			name:       "Rate limit error",
-			statusCode: 429,
-			body:       `{"error":{"message":"Rate limit exceeded. Please try again later.","type":"rate_limit_error"}}`,
-			want:       "API error (429): Rate limit exceeded. Please try again later.",
-		},
-		{
-			name:       "Authentication error",
-			statusCode: 401,
-			body:       `{"error":{"message":"Invalid API key provided","type":"invalid_request_error"}}`,
-			want:       "API error (401): Invalid API key provided",
-		},
-		{
-			name:       "Model not found",
-			statusCode: 404,
-			body:       `{"error":{"message":"Model not found","type":"invalid_request_error"}}`,
-			want:       "API error (404): Model not found",
-		},
-		{
-			name:       "Generic error with no JSON",
-			statusCode: 500,
-			body:       `Internal Server Error`,
-			want:       "API error (500): Internal Server Error",
-		},
-		{
-			name:       "Malformed JSON",
-			statusCode: 400,
-			body:       `{invalid json}`,
-			want:       "API error (400): {invalid json}",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractOpenAIErrorMessage(tt.statusCode, []byte(tt.body))
-			if got != tt.want {
-				t.Errorf("extractOpenAIErrorMessage() = %v, want %v", got, tt.want)
-			}
-		})
+	if resp.TokenUsage != nil {
+		t.Errorf("expected nil TokenUsage when debug=false, got %+v", resp.TokenUsage)
 	}
 }
 
-func TestOpenAIClient_GPT5UsesMaxCompletionTokens(t *testing.T) {
-	tests := []struct {
-		name                      string
-		model                     string
-		expectMaxTokens           bool
-		expectMaxCompletionTokens bool
-	}{
-		{
-			name:                      "gpt-5 uses max_completion_tokens",
-			model:                     "gpt-5",
-			expectMaxTokens:           false,
-			expectMaxCompletionTokens: true,
-		},
-		{
-			name:                      "gpt-5-turbo uses max_completion_tokens",
-			model:                     "gpt-5-turbo",
-			expectMaxTokens:           false,
-			expectMaxCompletionTokens: true,
-		},
-		{
-			name:                      "o1-preview uses max_completion_tokens",
-			model:                     "o1-preview",
-			expectMaxTokens:           false,
-			expectMaxCompletionTokens: true,
-		},
-		{
-			name:                      "o3-mini uses max_completion_tokens",
-			model:                     "o3-mini",
-			expectMaxTokens:           false,
-			expectMaxCompletionTokens: true,
-		},
-		{
-			name:                      "gpt-4o uses max_tokens",
-			model:                     "gpt-4o",
-			expectMaxTokens:           true,
-			expectMaxCompletionTokens: false,
-		},
-		{
-			name:                      "gpt-3.5-turbo uses max_tokens",
-			model:                     "gpt-3.5-turbo",
-			expectMaxTokens:           true,
-			expectMaxCompletionTokens: false,
-		},
+func TestLibClient_ListModels_AnthropicOK(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"claude-3-5-sonnet","type":"model"},{"id":"claude-3-opus","type":"model"}]}`))
+	}))
+	defer server.Close()
+
+	client, err := NewAnthropicClient("test-key", server.URL, "claude-x", 4096, 0.7, false)
+	if err != nil {
+		t.Fatalf("NewAnthropicClient: %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create client with only the fields we need for this test
-			client := &openaiClient{
-				model:       tt.model,
-				maxTokens:   4096,
-				temperature: 0.7,
-			}
-
-			// Build request using the same logic as the actual code
-			reqData := openaiRequest{
-				Model:    client.model,
-				Messages: []openaiMessage{{Role: "user", Content: "test"}},
-			}
-
-			// Apply the same logic as in the actual code
-			isNewModel := strings.HasPrefix(client.model, "gpt-5") || strings.HasPrefix(client.model, "o1-") || strings.HasPrefix(client.model, "o3-")
-
-			if isNewModel {
-				reqData.MaxCompletionTokens = client.maxTokens
-				// GPT-5 only supports temperature=1 (default), so don't set it
-			} else {
-				reqData.MaxTokens = client.maxTokens
-				reqData.Temperature = client.temperature
-			}
-
-			// Marshal to JSON to verify the fields
-			reqJSON, err := json.Marshal(reqData)
-			if err != nil {
-				t.Fatalf("Failed to marshal request: %v", err)
-			}
-
-			// Parse back to check which field is present
-			var parsed map[string]interface{}
-			if err := json.Unmarshal(reqJSON, &parsed); err != nil {
-				t.Fatalf("Failed to unmarshal request: %v", err)
-			}
-
-			// Check expectations
-			_, hasMaxTokens := parsed["max_tokens"]
-			_, hasMaxCompletionTokens := parsed["max_completion_tokens"]
-			_, hasTemperature := parsed["temperature"]
-
-			if tt.expectMaxTokens && !hasMaxTokens {
-				t.Errorf("Expected max_tokens field for model %s, but it was not present", tt.model)
-			}
-			if !tt.expectMaxTokens && hasMaxTokens {
-				t.Errorf("Did not expect max_tokens field for model %s, but it was present", tt.model)
-			}
-			if tt.expectMaxCompletionTokens && !hasMaxCompletionTokens {
-				t.Errorf("Expected max_completion_tokens field for model %s, but it was not present", tt.model)
-			}
-			if !tt.expectMaxCompletionTokens && hasMaxCompletionTokens {
-				t.Errorf("Did not expect max_completion_tokens field for model %s, but it was present", tt.model)
-			}
-
-			// Temperature should only be present for older models
-			if tt.expectMaxCompletionTokens && hasTemperature {
-				t.Errorf("Did not expect temperature field for model %s (new models don't support custom temperature)", tt.model)
-			}
-			if tt.expectMaxTokens && !hasTemperature {
-				t.Errorf("Expected temperature field for model %s (older models support custom temperature)", tt.model)
-			}
-
-			// Verify the value is correct
-			if tt.expectMaxTokens {
-				if val, ok := parsed["max_tokens"].(float64); !ok || int(val) != 4096 {
-					t.Errorf("Expected max_tokens=4096, got %v", parsed["max_tokens"])
-				}
-			}
-			if tt.expectMaxCompletionTokens {
-				if val, ok := parsed["max_completion_tokens"].(float64); !ok || int(val) != 4096 {
-					t.Errorf("Expected max_completion_tokens=4096, got %v", parsed["max_completion_tokens"])
-				}
-			}
-		})
+	models, err := client.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) != 2 {
+		t.Errorf("models = %v", models)
 	}
 }
 
-func TestNewAnthropicClient_BaseURL(t *testing.T) {
-	t.Run("default base URL when empty", func(t *testing.T) {
-		client, err := NewAnthropicClient("test-key", "", "claude-3-sonnet", 4096, 0.7, false)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		anthropic, ok := client.(*anthropicClient)
-		if !ok {
-			t.Fatal("expected *anthropicClient")
-		}
-		if anthropic.baseURL != "https://api.anthropic.com" {
-			t.Errorf("expected default base URL 'https://api.anthropic.com', got %q", anthropic.baseURL)
-		}
-	})
-
-	t.Run("custom base URL", func(t *testing.T) {
-		client, err := NewAnthropicClient("test-key", "https://proxy.example.com", "claude-3-sonnet", 4096, 0.7, false)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		anthropic, ok := client.(*anthropicClient)
-		if !ok {
-			t.Fatal("expected *anthropicClient")
-		}
-		if anthropic.baseURL != "https://proxy.example.com" {
-			t.Errorf("expected custom base URL, got %q", anthropic.baseURL)
-		}
-	})
-
-	t.Run("base URL with trailing slash normalized", func(t *testing.T) {
-		client, err := NewAnthropicClient("test-key", "https://proxy.example.com/", "claude-3-sonnet", 4096, 0.7, false)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		anthropic, ok := client.(*anthropicClient)
-		if !ok {
-			t.Fatal("expected *anthropicClient")
-		}
-		if anthropic.baseURL != "https://proxy.example.com" {
-			t.Errorf("expected trailing slash to be removed, got %q", anthropic.baseURL)
-		}
-	})
-
-	t.Run("invalid base URL scheme", func(t *testing.T) {
-		_, err := NewAnthropicClient("test-key", "ftp://proxy.example.com", "claude-3-sonnet", 4096, 0.7, false)
-		if err == nil {
-			t.Fatal("expected error for invalid URL scheme")
-		}
-	})
-
-	t.Run("invalid base URL format", func(t *testing.T) {
-		_, err := NewAnthropicClient("test-key", "://invalid", "claude-3-sonnet", 4096, 0.7, false)
-		if err == nil {
-			t.Fatal("expected error for invalid URL format")
-		}
-	})
-
-	t.Run("base URL without host", func(t *testing.T) {
-		_, err := NewAnthropicClient("test-key", "https://", "claude-3-sonnet", 4096, 0.7, false)
-		if err == nil {
-			t.Fatal("expected error for URL without host")
-		}
-	})
-}
-
-func TestNewOpenAIClient_BaseURL(t *testing.T) {
-	t.Run("default base URL when empty", func(t *testing.T) {
-		client, err := NewOpenAIClient("test-key", "", "gpt-4o", 4096, 0.7, false)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		openai, ok := client.(*openaiClient)
-		if !ok {
-			t.Fatal("expected *openaiClient")
-		}
-		if openai.baseURL != "https://api.openai.com" {
-			t.Errorf("expected default base URL 'https://api.openai.com', got %q", openai.baseURL)
-		}
-	})
-
-	t.Run("custom base URL", func(t *testing.T) {
-		client, err := NewOpenAIClient("test-key", "https://proxy.example.com", "gpt-4o", 4096, 0.7, false)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		openai, ok := client.(*openaiClient)
-		if !ok {
-			t.Fatal("expected *openaiClient")
-		}
-		if openai.baseURL != "https://proxy.example.com" {
-			t.Errorf("expected custom base URL, got %q", openai.baseURL)
-		}
-	})
-
-	t.Run("base URL with trailing slash normalized", func(t *testing.T) {
-		client, err := NewOpenAIClient("test-key", "https://proxy.example.com/", "gpt-4o", 4096, 0.7, false)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		openai, ok := client.(*openaiClient)
-		if !ok {
-			t.Fatal("expected *openaiClient")
-		}
-		if openai.baseURL != "https://proxy.example.com" {
-			t.Errorf("expected trailing slash to be removed, got %q", openai.baseURL)
-		}
-	})
-
-	t.Run("invalid base URL scheme", func(t *testing.T) {
-		_, err := NewOpenAIClient("test-key", "ftp://proxy.example.com", "gpt-4o", 4096, 0.7, false)
-		if err == nil {
-			t.Fatal("expected error for invalid URL scheme")
-		}
-	})
-
-	t.Run("invalid base URL format", func(t *testing.T) {
-		_, err := NewOpenAIClient("test-key", "://invalid", "gpt-4o", 4096, 0.7, false)
-		if err == nil {
-			t.Fatal("expected error for invalid URL format")
-		}
-	})
-
-	t.Run("base URL without host", func(t *testing.T) {
-		_, err := NewOpenAIClient("test-key", "https://", "gpt-4o", 4096, 0.7, false)
-		if err == nil {
-			t.Fatal("expected error for URL without host")
-		}
-	})
-}
-
-func TestValidateBaseURL(t *testing.T) {
-	tests := []struct {
-		name        string
-		baseURL     string
-		provider    string
-		wantURL     string
-		wantError   bool
-		errContains string
-	}{
-		{
-			name:      "valid HTTPS URL",
-			baseURL:   "https://api.example.com",
-			provider:  "Test",
-			wantURL:   "https://api.example.com",
-			wantError: false,
-		},
-		{
-			name:      "valid HTTP URL",
-			baseURL:   "http://localhost:8080",
-			provider:  "Test",
-			wantURL:   "http://localhost:8080",
-			wantError: false,
-		},
-		{
-			name:      "trailing slash removed",
-			baseURL:   "https://api.example.com/",
-			provider:  "Test",
-			wantURL:   "https://api.example.com",
-			wantError: false,
-		},
-		{
-			name:      "whitespace trimmed",
-			baseURL:   "  https://api.example.com  ",
-			provider:  "Test",
-			wantURL:   "https://api.example.com",
-			wantError: false,
-		},
-		{
-			name:        "invalid scheme",
-			baseURL:     "ftp://api.example.com",
-			provider:    "Test",
-			wantError:   true,
-			errContains: "must use http or https",
-		},
-		{
-			name:        "missing host",
-			baseURL:     "https://",
-			provider:    "Test",
-			wantError:   true,
-			errContains: "must include a host",
-		},
-		{
-			name:        "invalid URL",
-			baseURL:     "://invalid",
-			provider:    "Test",
-			wantError:   true,
-			errContains: "invalid",
-		},
+func TestNewOllamaClient_ReturnsErrorOnInvalidBaseURL(t *testing.T) {
+	// New signature: returns (LLMClient, error).
+	_, err := NewOllamaClient("not a url", "llama3", false)
+	if err == nil {
+		t.Fatal("expected error for invalid base URL, got nil")
 	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotURL, err := ValidateBaseURL(tt.baseURL, tt.provider)
-			if tt.wantError {
-				if err == nil {
-					t.Fatal("expected error but got none")
-				}
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("error %q should contain %q", err.Error(), tt.errContains)
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if gotURL != tt.wantURL {
-					t.Errorf("expected URL %q, got %q", tt.wantURL, gotURL)
-				}
-			}
-		})
+func TestLibClient_OpenAI_Chat_RoundTrip(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"resp_1","object":"chat.completion","created":1,
+			"model":"gpt-4o",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"hi from openai"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewOpenAIClient("test-key", server.URL, "gpt-4o", 4096, 0.7, false)
+	if err != nil {
+		t.Fatalf("NewOpenAIClient: %v", err)
+	}
+	resp, err := client.Chat(context.Background(),
+		[]Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if len(resp.Content) != 1 {
+		t.Fatalf("expected 1 content item, got %d", len(resp.Content))
+	}
+	tc, ok := resp.Content[0].(TextContent)
+	if !ok || tc.Text != "hi from openai" {
+		t.Errorf("content[0] = %+v", resp.Content[0])
+	}
+}
+
+func TestLibClient_Ollama_Chat_RoundTrip(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Ollama /api/chat returns the single non-stream response form.
+		if !strings.HasPrefix(r.URL.Path, "/api/chat") {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"model":"llama3","created_at":"2026-05-27T00:00:00Z",
+			"message":{"role":"assistant","content":"hi from ollama"},
+			"done":true,
+			"prompt_eval_count":5,"eval_count":3
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewOllamaClient(server.URL, "llama3", false)
+	if err != nil {
+		t.Fatalf("NewOllamaClient: %v", err)
+	}
+	resp, err := client.Chat(context.Background(),
+		[]Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if len(resp.Content) != 1 {
+		t.Fatalf("expected 1 content item, got %d", len(resp.Content))
+	}
+	tc, ok := resp.Content[0].(TextContent)
+	if !ok || tc.Text != "hi from ollama" {
+		t.Errorf("content[0] = %+v", resp.Content[0])
 	}
 }

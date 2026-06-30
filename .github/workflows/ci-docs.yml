@@ -2,9 +2,9 @@ name: CI - Documentation
 
 on:
     push:
-        branches: [ main, develop ]
+        branches: [ main, develop, 'feat/llm-lib-*' ]
     pull_request:
-        branches: [ main, develop ]
+        branches: [ main, develop, 'feat/llm-lib-*' ]
     workflow_dispatch:
 
 concurrency:

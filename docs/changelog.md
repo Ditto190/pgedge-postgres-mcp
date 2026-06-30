@@ -21,6 +21,22 @@ and this project adheres to
 
 ### Changed
 
+- The LLM provider clients (Anthropic, OpenAI, and Ollama) now use the
+  shared
+  [`pgedge-go-llm-lib`](https://github.com/pgEdge/pgedge-go-llm-lib)
+  library instead of hand-rolled HTTP wire code; approximately 1500
+  lines of provider-specific code are removed from `internal/chat/`.
+  Behaviour is preserved; the `LLMClient` interface is unchanged.
+
+- Anthropic prompt caching now covers both the tools block and the
+  system prompt (the library exposes a `WithSystemCaching` builder
+  alongside `WithToolCaching`). Long system prompts no longer pay
+  full input-token cost on every turn.
+
+- OpenAI models that require the Responses API (`gpt-5-*`, `o1-*`,
+  `o3-*`) are now supported transparently; the library routes them
+  to `/v1/responses` automatically based on the model name.
+
 - Refactored `Client.LoadMetadataFor` in
   `internal/database/connection.go`. The CTE-based metadata query
   now lives in `internal/database/load_metadata.sql` and is loaded

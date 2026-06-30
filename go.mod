@@ -1,6 +1,6 @@
 module pgedge-postgres-mcp
 
-go 1.25.8
+go 1.26.1
 
 require (
 	github.com/charmbracelet/glamour v0.10.0
@@ -8,6 +8,7 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.6
+	github.com/pgEdge/pgedge-go-llm-lib v0.1.0
 	golang.org/x/crypto v0.49.0
 	golang.org/x/term v0.41.0
 	gopkg.in/yaml.v3 v3.0.1
