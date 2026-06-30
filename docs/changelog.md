@@ -21,6 +21,15 @@ and this project adheres to
 
 ### Changed
 
+- Refactored `Client.LoadMetadataFor` in
+  `internal/database/connection.go`. The CTE-based metadata query
+  now lives in `internal/database/load_metadata.sql` and is loaded
+  via `//go:embed`; the per-row scan and the grouping/transform
+  logic are split into `scanMetadataRow` and `buildTableInfo` in
+  `internal/database/metadata.go`. `buildTableInfo` is pure and is
+  covered by table-driven unit tests that do not require a live
+  database. No behavior change. (#153)
+
 - The built-in `pg://system_info` resource now uses the machine-safe
   name `postgresql_system_info` (previously
   `"PostgreSQL System Information"`). The new name matches the
