@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -47,6 +48,29 @@ type FileWatcher struct {
 	reloadFn func() error
 	done     chan bool
 
+	// started records whether Start has been called. Stop only waits on
+	// watchExited when it has: watch() is what closes watchExited, so if
+	// Start was never called (a watcher can be constructed and stopped
+	// without ever starting, e.g. in tests), nothing would ever close it.
+	started atomic.Bool
+
+	// watchExited is closed by watch() right before it returns. Stop waits
+	// on this before waiting on checkWG: only watch() ever calls
+	// checkWG.Add, so once watch() has exited, no further Add can race
+	// with Stop's Wait (sync.WaitGroup forbids Add and Wait running
+	// concurrently while the counter could be transitioning through
+	// zero - closing fw.done alone does not guarantee watch() has
+	// stopped processing a buffered event before Stop reaches Wait).
+	watchExited chan struct{}
+
+	// checkWG tracks every scheduled-but-not-yet-resolved checkAndReload
+	// call (whether it goes on to run or is cleanly cancelled), so Stop
+	// can wait for all of them before returning. Without this, a debounce
+	// timer that has already fired - or fires concurrently with Stop -
+	// could still invoke reloadFn after the caller believes the watcher
+	// is fully stopped.
+	checkWG sync.WaitGroup
+
 	// hashMu guards lastHash/hasHash, since a new debounce timer can start
 	// before an in-flight one's callback has finished (Stop does not wait
 	// for an already-fired timer's goroutine to complete).
@@ -63,10 +87,11 @@ func NewFileWatcher(filePath string, reloadFn func() error) (*FileWatcher, error
 	}
 
 	fw := &FileWatcher{
-		watcher:  watcher,
-		filePath: filePath,
-		reloadFn: reloadFn,
-		done:     make(chan bool),
+		watcher:     watcher,
+		filePath:    filePath,
+		reloadFn:    reloadFn,
+		done:        make(chan bool),
+		watchExited: make(chan struct{}),
 	}
 
 	// Watch the directory containing the file, not the file itself.
@@ -91,18 +116,29 @@ func NewFileWatcher(filePath string, reloadFn func() error) (*FileWatcher, error
 
 // Start begins watching for file changes.
 func (fw *FileWatcher) Start() {
+	fw.started.Store(true)
 	go fw.watch()
 }
 
-// Stop stops watching for file changes.
+// Stop stops watching for file changes. It blocks until any
+// already-scheduled or in-flight checkAndReload call has resolved, so no
+// reloadFn invocation can happen after Stop returns.
 func (fw *FileWatcher) Stop() {
 	close(fw.done)
 	fw.watcher.Close()
+	if fw.started.Load() {
+		<-fw.watchExited
+	}
+	fw.checkWG.Wait()
 }
 
 // watch monitors directory events and triggers a content check, debounced,
 // whenever one occurs.
 func (fw *FileWatcher) watch() {
+	// Signal Stop that no further checkWG.Add call can happen, however
+	// this goroutine exits - watch is the only caller of Add.
+	defer close(fw.watchExited)
+
 	// Debounce timer to avoid a check per event for rapid changes.
 	var debounceTimer *time.Timer
 	debounceDuration := 100 * time.Millisecond
@@ -121,10 +157,16 @@ func (fw *FileWatcher) watch() {
 			// checkAndReload re-resolves and hashes fw.filePath itself, so
 			// unrelated activity is filtered out there instead of here by
 			// matching the event's name or type.
-			if debounceTimer != nil {
-				debounceTimer.Stop()
+			if debounceTimer != nil && debounceTimer.Stop() {
+				// Successfully cancelled before firing: the callback below
+				// will never run, so its Add(1) needs a matching Done here.
+				fw.checkWG.Done()
 			}
-			debounceTimer = time.AfterFunc(debounceDuration, fw.checkAndReload)
+			fw.checkWG.Add(1)
+			debounceTimer = time.AfterFunc(debounceDuration, func() {
+				defer fw.checkWG.Done()
+				fw.checkAndReload()
+			})
 
 		case err, ok := <-fw.watcher.Errors:
 			if !ok {
@@ -133,8 +175,8 @@ func (fw *FileWatcher) watch() {
 			log.Printf("[AUTH] Watcher error for %s: %v", fw.filePath, err)
 
 		case <-fw.done:
-			if debounceTimer != nil {
-				debounceTimer.Stop()
+			if debounceTimer != nil && debounceTimer.Stop() {
+				fw.checkWG.Done()
 			}
 			return
 		}

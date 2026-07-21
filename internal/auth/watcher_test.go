@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -541,5 +542,59 @@ func TestWatcherDetectsKubernetesSecretRotation(t *testing.T) {
 	if count == 0 {
 		t.Error("watcher never reloaded after the ..data symlink swap, even though the " +
 			"file content behind the watched path changed on disk (regression of #186)")
+	}
+}
+
+// TestWatcherStop_WaitsForInFlightReload is a regression test: Stop must
+// not return while a debounce-triggered checkAndReload is still running,
+// or could still run. Without waiting on checkWG, a reload already
+// in flight (or about to fire) when Stop is called could invoke reloadFn
+// after the caller believes the watcher is fully stopped and proceeds to
+// tear down whatever reloadFn touches.
+func TestWatcherStop_WaitsForInFlightReload(t *testing.T) {
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test.yaml")
+	if err := os.WriteFile(testFile, []byte("initial"), 0600); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	var inFlight int32
+	var mu sync.Mutex
+	reloadCount := 0
+	reloadFn := func() error {
+		atomic.StoreInt32(&inFlight, 1)
+		time.Sleep(100 * time.Millisecond)
+		mu.Lock()
+		reloadCount++
+		mu.Unlock()
+		atomic.StoreInt32(&inFlight, 0)
+		return nil
+	}
+
+	watcher, err := NewFileWatcher(testFile, reloadFn)
+	if err != nil {
+		t.Fatalf("NewFileWatcher failed: %v", err)
+	}
+	watcher.Start()
+
+	if err := os.WriteFile(testFile, []byte("updated"), 0600); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	// Land Stop() while the debounced reload is in flight: the debounce
+	// is 100ms and reloadFn sleeps a further 100ms, so calling Stop after
+	// 150ms lands squarely inside reloadFn's own sleep.
+	time.Sleep(150 * time.Millisecond)
+	watcher.Stop()
+
+	if atomic.LoadInt32(&inFlight) != 0 {
+		t.Fatal("BUG: Stop() returned while a reload was still in flight")
+	}
+
+	mu.Lock()
+	count := reloadCount
+	mu.Unlock()
+	if count == 0 {
+		t.Fatal("expected the in-flight reload to have completed by the time Stop() returned")
 	}
 }
