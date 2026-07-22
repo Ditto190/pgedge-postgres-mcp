@@ -71,6 +71,13 @@ type FileWatcher struct {
 	// is fully stopped.
 	checkWG sync.WaitGroup
 
+	// stopOnce makes Stop idempotent: close(fw.done) below panics on a
+	// second call, and callers are not guaranteed to serialize their own
+	// calls to Stop (e.g. TokenStore/UserStore.StopWatching check-then-nil
+	// their watcher field with no lock, so two concurrent StopWatching
+	// calls could both reach Stop on the same *FileWatcher).
+	stopOnce sync.Once
+
 	// hashMu guards lastHash/hasHash, since a new debounce timer can start
 	// before an in-flight one's callback has finished (Stop does not wait
 	// for an already-fired timer's goroutine to complete).
@@ -122,14 +129,19 @@ func (fw *FileWatcher) Start() {
 
 // Stop stops watching for file changes. It blocks until any
 // already-scheduled or in-flight checkAndReload call has resolved, so no
-// reloadFn invocation can happen after Stop returns.
+// reloadFn invocation can happen after Stop returns. Safe to call more
+// than once, including concurrently; only the first call does anything,
+// and every call - including redundant ones - returns only once that
+// first call has fully completed.
 func (fw *FileWatcher) Stop() {
-	close(fw.done)
-	fw.watcher.Close()
-	if fw.started.Load() {
-		<-fw.watchExited
-	}
-	fw.checkWG.Wait()
+	fw.stopOnce.Do(func() {
+		close(fw.done)
+		fw.watcher.Close()
+		if fw.started.Load() {
+			<-fw.watchExited
+		}
+		fw.checkWG.Wait()
+	})
 }
 
 // watch monitors directory events and triggers a content check, debounced,

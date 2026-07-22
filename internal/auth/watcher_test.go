@@ -598,3 +598,43 @@ func TestWatcherStop_WaitsForInFlightReload(t *testing.T) {
 		t.Fatal("expected the in-flight reload to have completed by the time Stop() returned")
 	}
 }
+
+// TestWatcherStop_Idempotent is a regression test: Stop must be safe to
+// call more than once. close(fw.done) panics on a second call unless Stop
+// guards against it, and callers are not guaranteed to serialize their own
+// calls (e.g. a defer watcher.Stop() alongside an explicit Stop() on an
+// error path, or two goroutines racing to shut down).
+func TestWatcherStop_Idempotent(t *testing.T) {
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test.yaml")
+	if err := os.WriteFile(testFile, []byte("initial"), 0600); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	watcher, err := NewFileWatcher(testFile, func() error { return nil })
+	if err != nil {
+		t.Fatalf("NewFileWatcher failed: %v", err)
+	}
+	watcher.Start()
+
+	// Sequential double-call must not panic.
+	watcher.Stop()
+	watcher.Stop()
+
+	// Concurrent calls on a second watcher must not panic either.
+	watcher2, err := NewFileWatcher(testFile, func() error { return nil })
+	if err != nil {
+		t.Fatalf("NewFileWatcher failed: %v", err)
+	}
+	watcher2.Start()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			watcher2.Stop()
+		}()
+	}
+	wg.Wait()
+}
