@@ -108,6 +108,19 @@ func TestHandleListDatabases_MethodNotAllowed(t *testing.T) {
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected status 405, got %d", w.Code)
 	}
+	if allow := w.Header().Get("Allow"); allow != http.MethodGet {
+		t.Errorf("expected Allow header %q, got %q", http.MethodGet, allow)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("expected Content-Type application/json, got %q", ct)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("response body is not valid JSON: %v (body: %q)", err, w.Body.String())
+	}
+	if body["error"] != "Method not allowed" {
+		t.Errorf("expected error 'Method not allowed', got %q", body["error"])
+	}
 }
 
 func TestHandleListDatabases_WithTokenHash(t *testing.T) {
@@ -204,6 +217,35 @@ func TestHandleSelectDatabase_MethodNotAllowed(t *testing.T) {
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected status 405, got %d", w.Code)
 	}
+	if allow := w.Header().Get("Allow"); allow != http.MethodPost {
+		t.Errorf("expected Allow header %q, got %q", http.MethodPost, allow)
+	}
+
+	bodyBytes := w.Body.Bytes()
+
+	// Confirm the "success" key is actually present in the raw JSON (not
+	// just its Go zero-value default), so this test can't pass against a
+	// bare {"error": "..."} shape that omits the field entirely -
+	// matching the documented SelectDatabaseResponse contract for every
+	// other error on this endpoint (400, 404, 403).
+	var raw map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &raw); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if _, ok := raw["success"]; !ok {
+		t.Fatal("expected response to include a \"success\" field, matching SelectDatabaseResponse")
+	}
+
+	var response SelectDatabaseResponse
+	if err := json.Unmarshal(bodyBytes, &response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if response.Success {
+		t.Error("expected success=false")
+	}
+	if response.Error != "Method not allowed" {
+		t.Errorf("expected error 'Method not allowed', got %q", response.Error)
+	}
 }
 
 func TestHandleSelectDatabase_InvalidBody(t *testing.T) {
@@ -231,6 +273,38 @@ func TestHandleSelectDatabase_InvalidBody(t *testing.T) {
 	}
 	if response.Error != "Invalid request body" {
 		t.Errorf("expected error 'Invalid request body', got %q", response.Error)
+	}
+}
+
+func TestHandleSelectDatabase_OversizedBody(t *testing.T) {
+	cm := createTestClientManager()
+	handler := NewDatabaseHandler(cm, nil, false, false)
+
+	// Must be syntactically valid JSON so json.Decoder keeps reading
+	// (buffering the string token) until it exceeds the body-size cap,
+	// rather than failing fast on a syntax error before the cap is hit.
+	huge := bytes.Repeat([]byte("x"), maxRequestBodySize+1)
+	oversized := append(append([]byte(`{"name":"`), huge...), []byte(`"}`)...)
+	req := httptest.NewRequest(http.MethodPost, "/api/databases/select",
+		bytes.NewReader(oversized))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	handler.HandleSelectDatabase(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("expected status 413, got %d", w.Code)
+	}
+
+	var response SelectDatabaseResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if response.Success {
+		t.Error("expected success=false")
+	}
+	if response.Error != "Request body too large" {
+		t.Errorf("expected error 'Request body too large', got %q", response.Error)
 	}
 }
 
