@@ -146,6 +146,159 @@ func TestHandleList_WrongMethod(t *testing.T) {
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, rr.Code)
 	}
+	if allow := rr.Header().Get("Allow"); allow != http.MethodGet {
+		t.Errorf("expected Allow header %q, got %q", http.MethodGet, allow)
+	}
+}
+
+func TestHandleGet_WrongMethod(t *testing.T) {
+	handler, cleanup, token := setupTestHandler(t)
+	defer cleanup()
+
+	req := httptest.NewRequest("POST", "/api/conversations/some-id", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	handler.HandleGet(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, rr.Code)
+	}
+	if allow := rr.Header().Get("Allow"); allow != http.MethodGet {
+		t.Errorf("expected Allow header %q, got %q", http.MethodGet, allow)
+	}
+}
+
+func TestHandleCreate_WrongMethod(t *testing.T) {
+	handler, cleanup, token := setupTestHandler(t)
+	defer cleanup()
+
+	req := httptest.NewRequest("GET", "/api/conversations", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	handler.HandleCreate(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, rr.Code)
+	}
+	if allow := rr.Header().Get("Allow"); allow != http.MethodPost {
+		t.Errorf("expected Allow header %q, got %q", http.MethodPost, allow)
+	}
+}
+
+func TestHandleUpdate_WrongMethod(t *testing.T) {
+	handler, cleanup, token := setupTestHandler(t)
+	defer cleanup()
+
+	req := httptest.NewRequest("GET", "/api/conversations/some-id", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	handler.HandleUpdate(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, rr.Code)
+	}
+	if allow := rr.Header().Get("Allow"); allow != http.MethodPut {
+		t.Errorf("expected Allow header %q, got %q", http.MethodPut, allow)
+	}
+}
+
+func TestHandleRename_WrongMethod(t *testing.T) {
+	handler, cleanup, token := setupTestHandler(t)
+	defer cleanup()
+
+	req := httptest.NewRequest("GET", "/api/conversations/some-id", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	handler.HandleRename(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, rr.Code)
+	}
+	if allow := rr.Header().Get("Allow"); allow != http.MethodPatch {
+		t.Errorf("expected Allow header %q, got %q", http.MethodPatch, allow)
+	}
+}
+
+func TestHandleDelete_WrongMethod(t *testing.T) {
+	handler, cleanup, token := setupTestHandler(t)
+	defer cleanup()
+
+	req := httptest.NewRequest("GET", "/api/conversations/some-id", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	handler.HandleDelete(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, rr.Code)
+	}
+	if allow := rr.Header().Get("Allow"); allow != http.MethodDelete {
+		t.Errorf("expected Allow header %q, got %q", http.MethodDelete, allow)
+	}
+}
+
+func TestHandleDeleteAll_WrongMethod(t *testing.T) {
+	handler, cleanup, token := setupTestHandler(t)
+	defer cleanup()
+
+	req := httptest.NewRequest("GET", "/api/conversations?all=true", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	handler.HandleDeleteAll(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, rr.Code)
+	}
+	if allow := rr.Header().Get("Allow"); allow != http.MethodDelete {
+		t.Errorf("expected Allow header %q, got %q", http.MethodDelete, allow)
+	}
+}
+
+func TestRegisterRoutes_CollectionWrongMethod(t *testing.T) {
+	handler, cleanup, token := setupTestHandler(t)
+	defer cleanup()
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, func(h http.HandlerFunc) http.HandlerFunc { return h })
+
+	req := httptest.NewRequest("PATCH", "/api/conversations", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, rr.Code)
+	}
+	if allow := rr.Header().Get("Allow"); allow != "GET, POST, DELETE" {
+		t.Errorf("expected Allow header %q, got %q", "GET, POST, DELETE", allow)
+	}
+}
+
+func TestRegisterRoutes_SingleWrongMethod(t *testing.T) {
+	handler, cleanup, token := setupTestHandler(t)
+	defer cleanup()
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, func(h http.HandlerFunc) http.HandlerFunc { return h })
+
+	req := httptest.NewRequest("POST", "/api/conversations/some-id", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, rr.Code)
+	}
+	if allow := rr.Header().Get("Allow"); allow != "GET, PUT, PATCH, DELETE" {
+		t.Errorf("expected Allow header %q, got %q", "GET, PUT, PATCH, DELETE", allow)
+	}
 }
 
 func TestHandleCreate(t *testing.T) {
@@ -221,6 +374,37 @@ func TestHandleCreate_InvalidBody(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, rr.Code)
+	}
+}
+
+func TestHandleCreate_OversizedBody(t *testing.T) {
+	handler, cleanup, token := setupTestHandler(t)
+	defer cleanup()
+
+	// Must be syntactically valid JSON so json.Decoder keeps reading
+	// (buffering the string token) until it exceeds the body-size cap,
+	// rather than failing fast on a syntax error before the cap is hit.
+	huge := bytes.Repeat([]byte("x"), maxRequestBodySize+1)
+	oversized := append(append([]byte(`{"provider":"`), huge...), []byte(`"}`)...)
+	req := httptest.NewRequest("POST", "/api/conversations", bytes.NewReader(oversized))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	handler.HandleCreate(rr, req)
+
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("Expected status %d, got %d", http.StatusRequestEntityTooLarge, rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("expected Content-Type application/json, got %q", ct)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("response body is not valid JSON: %v (body: %q)", err, rr.Body.String())
+	}
+	if body["error"] != "Request body too large" {
+		t.Errorf("expected error 'Request body too large', got %q", body["error"])
 	}
 }
 

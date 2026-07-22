@@ -12,12 +12,18 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"pgedge-postgres-mcp/internal/auth"
 	"pgedge-postgres-mcp/internal/config"
 	"pgedge-postgres-mcp/internal/database"
+	"pgedge-postgres-mcp/internal/httperror"
 )
+
+// maxRequestBodySize is the maximum allowed size for a request body
+// (10MB), preventing memory exhaustion from an oversized request.
+const maxRequestBodySize = 10 * 1024 * 1024
 
 // HostInfo represents a single host:port pair in the API response
 type HostInfo struct {
@@ -91,10 +97,8 @@ func NewDatabaseHandler(
 // HandleListDatabases handles GET /api/databases
 func (h *DatabaseHandler) HandleListDatabases(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		//nolint:errcheck // Error would only occur if connection is closed
-		json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
+		w.Header().Set("Allow", http.MethodGet)
+		httperror.Write(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
@@ -160,24 +164,38 @@ func (h *DatabaseHandler) HandleListDatabases(w http.ResponseWriter, r *http.Req
 func (h *DatabaseHandler) HandleSelectDatabase(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Allow", http.MethodPost)
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		//nolint:errcheck // Error would only occur if connection is closed
-		json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
+		json.NewEncoder(w).Encode(SelectDatabaseResponse{
+			Success: false,
+			Error:   "Method not allowed",
+		})
 		return
 	}
 
 	ctx := r.Context()
 	tokenHash := auth.GetTokenHashFromContext(ctx)
 
+	// Limit request body size to prevent memory exhaustion attacks
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
+
 	// Parse request body
 	var req SelectDatabaseRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		status := http.StatusBadRequest
+		errMsg := "Invalid request body"
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			status = http.StatusRequestEntityTooLarge
+			errMsg = "Request body too large"
+		}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
+		w.WriteHeader(status)
 		//nolint:errcheck // Error would only occur if connection is closed
 		json.NewEncoder(w).Encode(SelectDatabaseResponse{
 			Success: false,
-			Error:   "Invalid request body",
+			Error:   errMsg,
 		})
 		return
 	}

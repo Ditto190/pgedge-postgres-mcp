@@ -165,6 +165,32 @@ and this project adheres to
 
 ### Fixed
 
+- Every HTTP error response is now a consistent JSON object
+  (`{"error": "..."}`) with an appropriate status code, including
+  framework-level cases that previously bypassed the normal handlers
+  and returned a plaintext or empty body: an unknown route (404), a
+  method mismatch (405), an oversized request body (413, distinguished
+  from other body-read failures), and a panic inside a handler (500;
+  previously the connection was simply closed with no response at
+  all). A shared `internal/httperror` helper backs the new panic
+  recovery and 404 catch-all middleware, as well as the handlers that
+  previously wrote plaintext errors via `http.Error`
+  (`/mcp/v1`, `/api/chat/compact`, `/api/openapi.json`, and the
+  session-auth wrapper). Request bodies on `/api/chat/compact`,
+  `/api/databases/select`, and the `/api/conversations*` endpoints are
+  now also capped at 10MB, matching the existing `/mcp/v1` limit. The
+  HTTP server now sets `ReadHeaderTimeout`, `ReadTimeout`, and
+  `IdleTimeout` to guard against slow-header and slow-body attacks;
+  these fire before a request reaches a handler, so (unlike the cases
+  above) there is no response body to produce. Every 405 response now
+  also sets the `Allow` header naming the supported method(s), per
+  RFC 7231 §6.5.5. `GET /api/databases`'s 405 uses the shared
+  `internal/httperror` writer; `POST /api/databases/select`'s 405 uses
+  the endpoint's own documented `{"success": false, "error": "..."}`
+  shape instead, matching its other error responses (400, 404, 403)
+  rather than the bare `{"error": "..."}` it previously returned only
+  for that one status code. (#189)
+
 - Tool and resource responses now show the operator-configured database
   display name instead of the raw connection details. Previously,
   `query_database`, `get_schema_info`, `execute_explain`, `count_rows`,
