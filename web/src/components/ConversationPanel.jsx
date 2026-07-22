@@ -352,7 +352,7 @@ const ConversationPanel = ({
                                             }}
                                             disabled={disabled}
                                             sx={{
-                                                pr: 13,
+                                                pr: 21,
                                                 '&:hover': {
                                                     bgcolor: isDark ? alpha('#22B8CF', 0.08) : alpha('#15AABF', 0.06),
                                                 },
@@ -366,8 +366,9 @@ const ConversationPanel = ({
                                             }}
                                         >
                                             <ListItemText
+                                                sx={{ minWidth: 0 }}
                                                 primary={
-                                                    <Box>
+                                                    <Box sx={{ minWidth: 0, overflow: 'hidden' }}>
                                                         {conversation.connection && (
                                                             <Typography
                                                                 variant="caption"
@@ -387,6 +388,8 @@ const ConversationPanel = ({
                                                             sx={{
                                                                 fontWeight: conversation.id === currentConversationId ? 600 : 400,
                                                                 color: isDark ? '#F1F5F9' : '#1F2937',
+                                                                // Hard cap so long titles don't run under the rename/delete icons.
+                                                                maxWidth: '190px',
                                                             }}
                                                         >
                                                             {conversation.title}
@@ -528,6 +531,9 @@ const ConversationPanel = ({
                         onChange={(e) => setNewTitle(e.target.value)}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' && newTitle.trim()) {
+                                // Prevents the dialog's focus-restore-on-close from re-triggering
+                                // the rename icon's click via the browser's native Enter handling.
+                                e.preventDefault();
                                 handleConfirmRename();
                             }
                         }}
