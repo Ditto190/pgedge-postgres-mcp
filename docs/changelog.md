@@ -158,6 +158,7 @@ and this project adheres to
   per column, and `ColumnInfo.ForeignKeyRefs` is a `[]string` so all
   references are surfaced (comma-separated in the `fk_ref` output
   column) rather than silently discarding all but one. (#171)
+
 - Metadata loader now tolerates tables with zero columns
   (e.g. `CREATE TABLE foo()`). The query LEFT JOINs against the
   per-column catalog, so a zero-column table produced a row whose
