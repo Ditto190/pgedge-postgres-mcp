@@ -11,6 +11,19 @@ and this project adheres to
 
 ### Added
 
+- Database configuration now accepts `sslcert`, `sslkey`, and
+  `sslrootcert` fields, letting the server authenticate to PostgreSQL
+  with a client certificate instead of, or alongside, a password.
+  Configure them with `databases[].sslcert`, `databases[].sslkey`,
+  and `databases[].sslrootcert` in the configuration file, the
+  `-db-sslcert`, `-db-sslkey`, and `-db-sslrootcert` CLI flags, or the
+  `PGEDGE_DB_SSLCERT`/`PGSSLCERT`, `PGEDGE_DB_SSLKEY`/`PGSSLKEY`, and
+  `PGEDGE_DB_SSLROOTCERT`/`PGSSLROOTCERT` environment variables.
+  `sslcert` and `sslkey` must be set together. In HTTP mode, changing
+  any of these fields and reloading the configuration (`SIGHUP`) now
+  closes pooled per-token connections so they reconnect with the new
+  certificate settings.
+
 - A configurable per-attempt timeout bounds each individual HTTP attempt
   to an LLM or embedding provider, so a single slow attempt becomes
   retryable instead of consuming the whole request budget; the
