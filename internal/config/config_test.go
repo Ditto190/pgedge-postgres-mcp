@@ -1486,19 +1486,22 @@ func TestNamedDatabaseConfig_Validate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		// sslrootcert is threaded through verbatim under every sslmode,
+		// mirroring libpq/psql: pgx consults it only under the verifying
+		// modes and silently ignores it otherwise, so none of these are
+		// rejected at config time.
 		{
-			name: "sslrootcert without a verifying sslmode defaults to prefer and is rejected",
+			name: "sslrootcert without an sslmode defaults to prefer and is accepted",
 			config: NamedDatabaseConfig{
 				Name: "db1", User: "postgres",
 				Host: "localhost", Port: 5432,
 				Database:    "mydb",
 				SSLRootCert: "/certs/ca.crt",
 			},
-			wantErr: true,
-			errMsg:  "sslrootcert",
+			wantErr: false,
 		},
 		{
-			name: "sslrootcert with sslmode disable is rejected",
+			name: "sslrootcert with sslmode disable is accepted (ignored by pgx)",
 			config: NamedDatabaseConfig{
 				Name: "db1", User: "postgres",
 				Host: "localhost", Port: 5432,
@@ -1506,11 +1509,10 @@ func TestNamedDatabaseConfig_Validate(t *testing.T) {
 				SSLMode:     "disable",
 				SSLRootCert: "/certs/ca.crt",
 			},
-			wantErr: true,
-			errMsg:  "sslrootcert",
+			wantErr: false,
 		},
 		{
-			name: "sslrootcert with sslmode allow is rejected",
+			name: "sslrootcert with sslmode allow is accepted (ignored by pgx)",
 			config: NamedDatabaseConfig{
 				Name: "db1", User: "postgres",
 				Host: "localhost", Port: 5432,
@@ -1518,11 +1520,10 @@ func TestNamedDatabaseConfig_Validate(t *testing.T) {
 				SSLMode:     "allow",
 				SSLRootCert: "/certs/ca.crt",
 			},
-			wantErr: true,
-			errMsg:  "sslrootcert",
+			wantErr: false,
 		},
 		{
-			name: "sslrootcert with sslmode prefer is rejected",
+			name: "sslrootcert with sslmode prefer is accepted (ignored by pgx)",
 			config: NamedDatabaseConfig{
 				Name: "db1", User: "postgres",
 				Host: "localhost", Port: 5432,
@@ -1530,8 +1531,7 @@ func TestNamedDatabaseConfig_Validate(t *testing.T) {
 				SSLMode:     "prefer",
 				SSLRootCert: "/certs/ca.crt",
 			},
-			wantErr: true,
-			errMsg:  "sslrootcert",
+			wantErr: false,
 		},
 		{
 			name: "sslrootcert with sslmode require is valid",

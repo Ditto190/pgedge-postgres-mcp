@@ -19,12 +19,11 @@ and this project adheres to
   `-db-sslcert`, `-db-sslkey`, and `-db-sslrootcert` CLI flags, or the
   `PGEDGE_DB_SSLCERT`/`PGSSLCERT`, `PGEDGE_DB_SSLKEY`/`PGSSLKEY`, and
   `PGEDGE_DB_SSLROOTCERT`/`PGSSLROOTCERT` environment variables.
-  `sslcert` and `sslkey` must be set together. `sslrootcert` requires
-  `sslmode` to be `require`, `verify-ca`, or `verify-full`; under
-  `disable`, `allow`, or `prefer` (the default) pgx never actually
-  checks the server certificate against it, so the server rejects
-  that combination at startup rather than silently accepting a
-  no-op configuration. In HTTP mode, changing any of these fields and
+  `sslcert` and `sslkey` must be set together. `sslrootcert` takes
+  effect only under `sslmode` `require`, `verify-ca`, or `verify-full`;
+  under `disable`, `allow`, or `prefer` (the default) pgx never checks
+  the server certificate against it and silently ignores the value,
+  matching libpq and `psql`. In HTTP mode, changing any of these fields and
   reloading the configuration (`SIGHUP`) now closes pooled per-token
   connections so they reconnect with the new certificate settings.
 

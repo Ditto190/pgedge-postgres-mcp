@@ -71,9 +71,9 @@ The `sslrootcert` field is independent and can be set on its own to
 verify the server's certificate without client certificate
 authentication, but only takes effect under `sslmode: "require"`,
 `"verify-ca"`, or `"verify-full"`; under `"disable"`, `"allow"`, or
-`"prefer"` (the default) the server certificate is never actually
-checked against it, so the server rejects that combination at
-startup too.
+`"prefer"` (the default) the server certificate is never checked
+against it and the value is silently ignored, matching libpq and
+`psql`.
 
 ### Access Control
 
