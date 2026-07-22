@@ -163,8 +163,19 @@ and this project adheres to
   library's expected shape. The on-disk JSON written by this and
   later versions uses the typed content-block format directly.
 
+- The web client now groups the conversation-level Save and Delete
+  actions in a new menu in the status banner header, alongside the
+  database switcher and connection details, rather than placing them
+  next to the message input. This keeps the destructive Delete action
+  away from the Send button and clarifies that the actions affect the
+  whole conversation. Deleting a conversation now requires confirmation
+  via a dialog instead of a browser prompt. (#73)
+
 ### Fixed
 
+- The edit and delete icons in the conversation history list no longer
+  overlap the conversation title; the list item now reserves enough
+  space for both controls so long titles ellipsize cleanly. (#73)
 - Every HTTP error response is now a consistent JSON object
   (`{"error": "..."}`) with an appropriate status code, including
   framework-level cases that previously bypassed the normal handlers

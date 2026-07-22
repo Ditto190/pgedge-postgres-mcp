@@ -64,7 +64,18 @@ const Login = () => {
     const [error, setError] = useState('');
     const [warning, setWarning] = useState('');
     const [loading, setLoading] = useState(false);
+    const [usernameAutofilled, setUsernameAutofilled] = useState(false);
+    const [passwordAutofilled, setPasswordAutofilled] = useState(false);
     const { login } = useAuth();
+
+    // Browser autofill bypasses onChange, so detect it via MUI's mui-auto-fill animation instead.
+    const handleAutofillDetect = (setAutofilled) => (e) => {
+        if (e.animationName === 'mui-auto-fill') {
+            setAutofilled(true);
+        } else if (e.animationName === 'mui-auto-fill-cancel') {
+            setAutofilled(false);
+        }
+    };
 
     // Check for disconnect message on mount
     useEffect(() => {
@@ -350,8 +361,10 @@ const Login = () => {
                                 required
                                 autoFocus
                                 disabled={loading}
+                                InputLabelProps={{ shrink: usernameAutofilled || Boolean(username) }}
                                 inputProps={{
                                     autoComplete: 'off',
+                                    onAnimationStart: handleAutofillDetect(setUsernameAutofilled),
                                 }}
                                 sx={{
                                     '& .MuiOutlinedInput-root': {
@@ -380,8 +393,10 @@ const Login = () => {
                                 margin="normal"
                                 required
                                 disabled={loading}
+                                InputLabelProps={{ shrink: passwordAutofilled || Boolean(password) }}
                                 inputProps={{
                                     autoComplete: 'current-password',
+                                    onAnimationStart: handleAutofillDetect(setPasswordAutofilled),
                                 }}
                                 sx={{
                                     '& .MuiOutlinedInput-root': {
@@ -447,7 +462,7 @@ const Login = () => {
                         color: 'rgba(255, 255, 255, 0.6)',
                     }}
                 >
-                    &copy; 2025 pgEdge, Inc.
+                    &copy; 2025 - 2026, pgEdge, Inc.
                 </Typography>
             </Container>
         </Box>

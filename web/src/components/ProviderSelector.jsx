@@ -25,7 +25,6 @@ import {
 } from '@mui/material';
 import {
     Settings as SettingsIcon,
-    Delete as DeleteIcon,
 } from '@mui/icons-material';
 import PreferencesPopover from './PreferencesPopover';
 
@@ -44,8 +43,6 @@ const ProviderSelector = React.memo(({
     onDebugChange,
     disabled,
     loadingModels,
-    onClear,
-    hasMessages = false,
 }) => {
     const [preferencesAnchor, setPreferencesAnchor] = useState(null);
     const theme = useTheme();
@@ -221,26 +218,6 @@ const ProviderSelector = React.memo(({
                 debug={debug}
                 onDebugChange={onDebugChange}
             />
-
-            {/* Clear Button */}
-            {hasMessages && (
-                <Tooltip title="Clear Conversation">
-                    <IconButton
-                        onClick={onClear}
-                        disabled={disabled}
-                        size="small"
-                        sx={{
-                            ...iconButtonStyles,
-                            '&:hover': {
-                                bgcolor: isDark ? alpha('#EF4444', 0.08) : alpha('#EF4444', 0.04),
-                                color: '#EF4444',
-                            },
-                        }}
-                    >
-                        <DeleteIcon />
-                    </IconButton>
-                </Tooltip>
-            )}
         </Box>
     );
 });
@@ -268,8 +245,6 @@ ProviderSelector.propTypes = {
     onDebugChange: PropTypes.func.isRequired,
     disabled: PropTypes.bool.isRequired,
     loadingModels: PropTypes.bool.isRequired,
-    onClear: PropTypes.func,
-    hasMessages: PropTypes.bool,
 };
 
 export default ProviderSelector;
