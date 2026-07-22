@@ -364,6 +364,15 @@ var validTargetSessionAttrs = map[string]bool{
 	"prefer-standby": true,
 }
 
+// verifyingSSLModes lists the sslmode values under which pgx (and libpq)
+// actually verify the server certificate against sslrootcert, rather
+// than setting InsecureSkipVerify and silently ignoring it.
+var verifyingSSLModes = map[string]bool{
+	"require":     true,
+	"verify-ca":   true,
+	"verify-full": true,
+}
+
 // validateHostname checks that a hostname does not contain characters
 // that would corrupt a libpq connection string (commas, whitespace,
 // at-signs, slashes, or question marks).
@@ -447,6 +456,31 @@ func (cfg *NamedDatabaseConfig) Validate() error {
 			"database %q: 'sslcert' and 'sslkey' must be set together",
 			cfg.Name,
 		)
+	}
+
+	// sslrootcert only has an effect when the driver actually verifies the
+	// server's certificate against it. pgx (and libpq) treat "disable",
+	// "allow", and "prefer" (the default when sslmode is unset) as
+	// InsecureSkipVerify: the CA is loaded into the pool but never
+	// consulted, so a lone sslrootcert under those modes is silently a
+	// no-op and gives a false sense of security. Only "require" (which
+	// pgx upgrades to verify-ca-equivalent behavior specifically because
+	// a root cert is present), "verify-ca", and "verify-full" actually
+	// use it.
+	if cfg.SSLRootCert != "" {
+		effectiveSSLMode := cfg.SSLMode
+		if effectiveSSLMode == "" {
+			effectiveSSLMode = "prefer"
+		}
+		if !verifyingSSLModes[effectiveSSLMode] {
+			return fmt.Errorf(
+				"database %q: 'sslrootcert' requires 'sslmode' to be "+
+					"'require', 'verify-ca', or 'verify-full' (got %q); "+
+					"otherwise the server certificate is never verified "+
+					"against it",
+				cfg.Name, effectiveSSLMode,
+			)
+		}
 	}
 
 	return nil

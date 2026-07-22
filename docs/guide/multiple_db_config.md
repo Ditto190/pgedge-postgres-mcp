@@ -69,7 +69,11 @@ The `sslcert` and `sslkey` fields must be set together; providing
 only one causes the server to reject the configuration at startup.
 The `sslrootcert` field is independent and can be set on its own to
 verify the server's certificate without client certificate
-authentication.
+authentication, but only takes effect under `sslmode: "require"`,
+`"verify-ca"`, or `"verify-full"`; under `"disable"`, `"allow"`, or
+`"prefer"` (the default) the server certificate is never actually
+checked against it, so the server rejects that combination at
+startup too.
 
 ### Access Control
 

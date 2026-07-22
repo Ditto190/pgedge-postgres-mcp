@@ -81,7 +81,7 @@ func main() {
 	dbSSLMode := flag.String("db-sslmode", "", "Database SSL mode (disable, require, verify-ca, verify-full)")
 	dbSSLCert := flag.String("db-sslcert", "", "Path to the client certificate file, for client certificate authentication")
 	dbSSLKey := flag.String("db-sslkey", "", "Path to the client private key file, for client certificate authentication")
-	dbSSLRootCert := flag.String("db-sslrootcert", "", "Path to the CA certificate file used to verify the server")
+	dbSSLRootCert := flag.String("db-sslrootcert", "", "Path to the CA certificate file used to verify the server; requires -db-sslmode to be require, verify-ca, or verify-full")
 	dbHosts := flag.String("db-hosts", "", "Comma-separated host:port pairs for multi-host connections (e.g., \"host1:5432,host2:5433\")")
 	dbTargetSessionAttrs := flag.String("db-target-session-attrs", "", "Target session attributes for multi-host (e.g., \"read-write\", \"any\", \"primary\", \"standby\")")
 

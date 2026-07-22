@@ -37,7 +37,7 @@ Usage of bin/pgedge-postgres-mcp:
   -db-sslmode string
     	Database SSL mode (disable, require, verify-ca, verify-full)
   -db-sslrootcert string
-    	Path to the CA certificate file used to verify the server
+    	Path to the CA certificate file used to verify the server; requires -db-sslmode to be require, verify-ca, or verify-full
   -db-user string
     	Database user
   -debug
