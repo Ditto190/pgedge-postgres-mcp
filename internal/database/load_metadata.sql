@@ -70,12 +70,20 @@ unique_columns AS (
     JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(con.conkey)
     WHERE con.contype = 'u'
 ),
+-- A single column can participate in more than one foreign-key
+-- constraint (e.g. the same column referenced by two different parent
+-- tables), so aggregate every reference for a column into one ordered,
+-- de-duplicated array. This yields exactly one row per
+-- (schema, table, column); without the GROUP BY the downstream LEFT
+-- JOIN would multiply the per-column rows and emit duplicate columns
+-- (issue #171).
 fk_columns AS (
     SELECT
         n.nspname AS schema_name,
         c.relname AS table_name,
         a.attname AS column_name,
-        fn.nspname || '.' || fc.relname || '.' || fa.attname AS fk_reference
+        array_agg(DISTINCT fn.nspname || '.' || fc.relname || '.' || fa.attname
+                  ORDER BY fn.nspname || '.' || fc.relname || '.' || fa.attname) AS fk_references
     FROM pg_constraint con
     JOIN pg_class c ON c.oid = con.conrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -85,6 +93,7 @@ fk_columns AS (
     JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = cols.col_num
     JOIN pg_attribute fa ON fa.attrelid = fc.oid AND fa.attnum = cols.ref_num
     WHERE con.contype = 'f'
+    GROUP BY n.nspname, c.relname, a.attname
 ),
 indexed_columns AS (
     SELECT DISTINCT
@@ -125,7 +134,7 @@ SELECT
     ci.type_modifier,
     CASE WHEN pk.column_name IS NOT NULL THEN true ELSE false END AS is_primary_key,
     CASE WHEN uq.column_name IS NOT NULL THEN true ELSE false END AS is_unique,
-    COALESCE(fk.fk_reference, '') AS fk_reference,
+    COALESCE(fk.fk_references, ARRAY[]::text[]) AS fk_references,
     CASE WHEN ix.column_name IS NOT NULL THEN true ELSE false END AS is_indexed,
     COALESCE(ci.identity_type, '') AS identity_type,
     COALESCE(cd.default_value, '') AS default_value

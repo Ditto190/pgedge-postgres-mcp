@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -537,6 +538,109 @@ func TestLoadMetadata_TableWithNoColumns(t *testing.T) {
 	if len(tableInfo.Columns) != 0 {
 		t.Errorf("expected empty-columns table to have 0 columns, got %d", len(tableInfo.Columns))
 	}
+}
+
+// TestLoadMetadata_ColumnWithMultipleFKs is a regression test for issue
+// #171. A single column can participate in more than one foreign-key
+// constraint; before the fix the fk_columns CTE emitted one row per FK,
+// and the downstream LEFT JOIN multiplied the per-column rows, producing
+// duplicate ColumnInfo entries for that column.
+//
+// This test creates a child column referenced by two different parent
+// tables, loads metadata, and asserts that the column appears exactly
+// once and that ForeignKeyRefs carries both references in deterministic
+// (sorted) order. It is gated on TEST_PGEDGE_POSTGRES_CONNECTION_STRING,
+// matching the convention used by the other live-DB regression tests.
+func TestLoadMetadata_ColumnWithMultipleFKs(t *testing.T) {
+	connStr := os.Getenv("TEST_PGEDGE_POSTGRES_CONNECTION_STRING")
+	if connStr == "" {
+		t.Skip("TEST_PGEDGE_POSTGRES_CONNECTION_STRING not set; skipping live-DB regression test for issue #171")
+	}
+
+	cleanup := setupMultiFKFixture(t, connStr)
+	defer cleanup()
+
+	client := NewClientWithConnectionString(connStr, nil)
+	defer client.Close()
+
+	if err := client.ConnectTo(connStr); err != nil {
+		t.Fatalf("ConnectTo failed: %v", err)
+	}
+	if err := client.LoadMetadataFor(connStr); err != nil {
+		t.Fatalf("LoadMetadataFor returned error: %v", err)
+	}
+
+	meta := client.GetMetadataFor(connStr)
+	key := "public.pgedge_mcp_issue171_child"
+	tableInfo, ok := meta[key]
+	if !ok {
+		t.Fatalf("expected metadata to contain %q, got keys: %v", key, mapKeys(meta))
+	}
+
+	refCols := columnsNamed(tableInfo.Columns, "ref")
+	if len(refCols) != 1 {
+		t.Fatalf("expected column %q to appear exactly once, got %d (issue #171 duplicate rows)", "ref", len(refCols))
+	}
+
+	want := []string{
+		"public.pgedge_mcp_issue171_parent_a.id",
+		"public.pgedge_mcp_issue171_parent_b.id",
+	}
+	if !reflect.DeepEqual(refCols[0].ForeignKeyRefs, want) {
+		t.Errorf("expected both FK references in sorted order:\n got:  %v\n want: %v",
+			refCols[0].ForeignKeyRefs, want)
+	}
+}
+
+// setupMultiFKFixture creates a child table whose `ref` column is
+// referenced by two different parent tables (the issue #171 fixture) and
+// returns a cleanup function that drops the fixture and closes the pool.
+// It fails the test if any setup statement errors.
+func setupMultiFKFixture(t *testing.T, connStr string) func() {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
+	pool, err := pgxpool.New(ctx, connStr)
+	if err != nil {
+		cancel()
+		t.Fatalf("failed to open setup pool: %v", err)
+	}
+
+	const dropStmt = "DROP TABLE IF EXISTS public.pgedge_mcp_issue171_child, " +
+		"public.pgedge_mcp_issue171_parent_a, public.pgedge_mcp_issue171_parent_b CASCADE"
+	stmts := []string{
+		dropStmt,
+		"CREATE TABLE public.pgedge_mcp_issue171_parent_a (id integer PRIMARY KEY)",
+		"CREATE TABLE public.pgedge_mcp_issue171_parent_b (id integer PRIMARY KEY)",
+		"CREATE TABLE public.pgedge_mcp_issue171_child (" +
+			"ref integer, " +
+			"CONSTRAINT fk_a FOREIGN KEY (ref) REFERENCES public.pgedge_mcp_issue171_parent_a(id), " +
+			"CONSTRAINT fk_b FOREIGN KEY (ref) REFERENCES public.pgedge_mcp_issue171_parent_b(id))",
+	}
+	for _, stmt := range stmts {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			pool.Close()
+			cancel()
+			t.Fatalf("failed to set up fixture (%q): %v", stmt, err)
+		}
+	}
+
+	return func() {
+		_, _ = pool.Exec(context.Background(), dropStmt)
+		pool.Close()
+		cancel()
+	}
+}
+
+// columnsNamed returns the columns in cols whose name equals name.
+func columnsNamed(cols []ColumnInfo, name string) []ColumnInfo {
+	var out []ColumnInfo
+	for _, c := range cols {
+		if c.ColumnName == name {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func mapKeys(m map[string]TableInfo) []string {

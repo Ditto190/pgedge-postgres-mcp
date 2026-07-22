@@ -460,7 +460,7 @@ efficiency. The columns are:
 | `col_desc` | Column description. |
 | `is_pk` | true if part of primary key. |
 | `is_unique` | true if has unique constraint (excluding PK). |
-| `fk_ref` | Foreign key reference in format "schema.table.column" if FK. |
+| `fk_ref` | FK reference(s), "schema.table.column", comma-separated. |
 | `is_indexed` | true if column is part of any index. |
 | `identity` | "a" for GENERATED ALWAYS, "d" for BY DEFAULT, empty otherwise. |
 | `default` | Default value expression if any. |

@@ -27,13 +27,13 @@ type ColumnInfo struct {
 	DataType         string
 	IsNullable       string
 	Description      string
-	IsPrimaryKey     bool   // True if this column is part of the primary key
-	IsUnique         bool   // True if this column has a unique constraint (excluding PK)
-	ForeignKeyRef    string // Reference in format "schema.table.column" if FK, empty otherwise
-	IsIndexed        bool   // True if this column is part of any index
-	IsIdentity       string // Identity generation: "" (none), "a" (ALWAYS), "d" (BY DEFAULT)
-	DefaultValue     string // Default value expression if any, empty otherwise
-	IsVectorColumn   bool   // True if this is a pgvector column
-	VectorDimensions int    // Number of dimensions for vector columns (0 if not a vector)
-	VectorType       string // Underlying vector type: "vector", "halfvec", or "" if not a vector column
+	IsPrimaryKey     bool     // True if this column is part of the primary key
+	IsUnique         bool     // True if this column has a unique constraint (excluding PK)
+	ForeignKeyRefs   []string // References in format "schema.table.column"; one entry per FK the column participates in, empty if none
+	IsIndexed        bool     // True if this column is part of any index
+	IsIdentity       string   // Identity generation: "" (none), "a" (ALWAYS), "d" (BY DEFAULT)
+	DefaultValue     string   // Default value expression if any, empty otherwise
+	IsVectorColumn   bool     // True if this is a pgvector column
+	VectorDimensions int      // Number of dimensions for vector columns (0 if not a vector)
+	VectorType       string   // Underlying vector type: "vector", "halfvec", or "" if not a vector column
 }

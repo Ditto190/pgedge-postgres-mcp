@@ -173,9 +173,20 @@ and this project adheres to
 
 ### Fixed
 
+- Metadata loader no longer emits duplicate column entries for a
+  column that participates in more than one foreign-key constraint.
+  The `fk_columns` CTE produced one row per foreign key, so the
+  downstream LEFT JOIN multiplied the per-column rows; `get_schema_info`
+  consequently listed the affected column once per foreign key. The CTE
+  now aggregates every reference into one ordered, de-duplicated array
+  per column, and `ColumnInfo.ForeignKeyRefs` is a `[]string` so all
+  references are surfaced (comma-separated in the `fk_ref` output
+  column) rather than silently discarding all but one. (#171)
+
 - The edit and delete icons in the conversation history list no longer
   overlap the conversation title; the list item now reserves enough
   space for both controls so long titles ellipsize cleanly. (#73)
+
 - Every HTTP error response is now a consistent JSON object
   (`{"error": "..."}`) with an appropriate status code, including
   framework-level cases that previously bypassed the normal handlers
