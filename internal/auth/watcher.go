@@ -218,14 +218,21 @@ func (fw *FileWatcher) checkAndReload() {
 	if fw.hasHash && hash == fw.lastHash {
 		return
 	}
-	fw.lastHash = hash
-	fw.hasHash = true
 
+	// Record the hash only after a successful reload. If reloadFn fails,
+	// leaving lastHash unchanged means the next directory event retries the
+	// same content rather than treating it as already handled - otherwise a
+	// transient failure (e.g. a one-off read error on otherwise-valid new
+	// content) would strand the store on stale data until the file changed
+	// again, which is exactly the missed-update class of bug this watcher
+	// exists to prevent.
 	if err := fw.reloadFn(); err != nil {
 		log.Printf("[AUTH] Failed to reload %s: %v", fw.filePath, err)
-	} else {
-		log.Printf("[AUTH] Reloaded %s", fw.filePath)
+		return
 	}
+	fw.lastHash = hash
+	fw.hasHash = true
+	log.Printf("[AUTH] Reloaded %s", fw.filePath)
 }
 
 // hashFile returns the SHA-256 hash of the file at path, transparently
