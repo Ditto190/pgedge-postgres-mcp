@@ -11,6 +11,22 @@ and this project adheres to
 
 ### Added
 
+- Database configuration now accepts `sslcert`, `sslkey`, and
+  `sslrootcert` fields, letting the server authenticate to PostgreSQL
+  with a client certificate instead of, or alongside, a password.
+  Configure them with `databases[].sslcert`, `databases[].sslkey`,
+  and `databases[].sslrootcert` in the configuration file, the
+  `-db-sslcert`, `-db-sslkey`, and `-db-sslrootcert` CLI flags, or the
+  `PGEDGE_DB_SSLCERT`/`PGSSLCERT`, `PGEDGE_DB_SSLKEY`/`PGSSLKEY`, and
+  `PGEDGE_DB_SSLROOTCERT`/`PGSSLROOTCERT` environment variables.
+  `sslcert` and `sslkey` must be set together. `sslrootcert` takes
+  effect only under `sslmode` `require`, `verify-ca`, or `verify-full`;
+  under `disable`, `allow`, or `prefer` (the default) pgx never checks
+  the server certificate against it and silently ignores the value,
+  matching libpq and `psql`. In HTTP mode, changing any of these fields and
+  reloading the configuration (`SIGHUP`) now closes pooled per-token
+  connections so they reconnect with the new certificate settings.
+
 - A configurable per-attempt timeout bounds each individual HTTP attempt
   to an LLM or embedding provider, so a single slow attempt becomes
   retryable instead of consuming the whole request budget; the
@@ -147,6 +163,14 @@ and this project adheres to
   library's expected shape. The on-disk JSON written by this and
   later versions uses the typed content-block format directly.
 
+- The web client now groups the conversation-level Save and Delete
+  actions in a new menu in the status banner header, alongside the
+  database switcher and connection details, rather than placing them
+  next to the message input. This keeps the destructive Delete action
+  away from the Send button and clarifies that the actions affect the
+  whole conversation. Deleting a conversation now requires confirmation
+  via a dialog instead of a browser prompt. (#73)
+
 ### Fixed
 
 - Metadata loader no longer emits duplicate column entries for a
@@ -158,6 +182,67 @@ and this project adheres to
   per column, and `ColumnInfo.ForeignKeyRefs` is a `[]string` so all
   references are surfaced (comma-separated in the `fk_ref` output
   column) rather than silently discarding all but one. (#171)
+
+- The edit and delete icons in the conversation history list no longer
+  overlap the conversation title; the list item now reserves enough
+  space for both controls so long titles ellipsize cleanly. (#73)
+
+- Every HTTP error response is now a consistent JSON object
+  (`{"error": "..."}`) with an appropriate status code, including
+  framework-level cases that previously bypassed the normal handlers
+  and returned a plaintext or empty body: an unknown route (404), a
+  method mismatch (405), an oversized request body (413, distinguished
+  from other body-read failures), and a panic inside a handler (500;
+  previously the connection was simply closed with no response at
+  all). A shared `internal/httperror` helper backs the new panic
+  recovery and 404 catch-all middleware, as well as the handlers that
+  previously wrote plaintext errors via `http.Error`
+  (`/mcp/v1`, `/api/chat/compact`, `/api/openapi.json`, and the
+  session-auth wrapper). Request bodies on `/api/chat/compact`,
+  `/api/databases/select`, and the `/api/conversations*` endpoints are
+  now also capped at 10MB, matching the existing `/mcp/v1` limit. The
+  HTTP server now sets `ReadHeaderTimeout`, `ReadTimeout`, and
+  `IdleTimeout` to guard against slow-header and slow-body attacks;
+  these fire before a request reaches a handler, so (unlike the cases
+  above) there is no response body to produce. Every 405 response now
+  also sets the `Allow` header naming the supported method(s), per
+  RFC 7231 §6.5.5. `GET /api/databases`'s 405 uses the shared
+  `internal/httperror` writer; `POST /api/databases/select`'s 405 uses
+  the endpoint's own documented `{"success": false, "error": "..."}`
+  shape instead, matching its other error responses (400, 404, 403)
+  rather than the bare `{"error": "..."}` it previously returned only
+  for that one status code. (#189)
+
+- Tool and resource responses now show the operator-configured database
+  display name instead of the raw connection details. Previously,
+  `query_database`, `get_schema_info`, `execute_explain`, `count_rows`,
+  and `similarity_search` only masked the password in the connection
+  string they showed the caller, leaving the real host, port, and
+  database name visible; `pg://system_info` was worse, reporting the
+  live-resolved server address from `inet_server_addr()`, which can be
+  an internal-only address (a container or pod IP) that differs from,
+  and may be unreachable via, the address the operator actually
+  configured. A new `Client.DisplayName()` now backs every one of
+  these responses with the connection's configured `name` (falling
+  back to a password-masked connection string when none is
+  configured); `pg://system_info` gains a `connection_name` field and
+  its `host`/`port` fields now reflect the configured values rather
+  than a live-resolved one. Ad-hoc connection strings a caller types
+  inline (the `postgres://...` mini-DSL supported by `query_database`)
+  are intentionally left as-is, since echoing back what the caller
+  themselves supplied is not a leak. (#187)
+
+- The token and user file watchers now detect changes delivered through an
+  atomically-swapped symlink, such as a Kubernetes-projected Secret or
+  ConfigMap volume, or any tool that renames a new version into place.
+  Previously the watcher matched events by exact filename and only handled
+  `Write`/`Create`, so a symlink swap on a different directory entry (for
+  example Kubernetes' own `..data` symlink) never triggered a reload and
+  updates only took effect on restart. The watcher now reacts to any event
+  in the watched directory and re-resolves and hashes the watched path's
+  content to decide whether a reload is warranted, catching changes that
+  never touch the watched filename directly while still ignoring
+  unrelated activity elsewhere in the directory. (#186)
 
 - Metadata loader now tolerates tables with zero columns
   (e.g. `CREATE TABLE foo()`). The query LEFT JOINs against the

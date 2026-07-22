@@ -13,6 +13,7 @@ import { Box, Paper, useTheme } from '@mui/material';
 import { useAuth } from '../contexts/AuthContext';
 import { useLLMProcessing } from '../contexts/LLMProcessingContext';
 import { useDatabaseContext } from '../contexts/DatabaseContext';
+import { useConversationActions } from '../contexts/ConversationActionsContext';
 import { useLocalStorageBoolean } from '../hooks/useLocalStorage';
 import { useQueryHistory } from '../hooks/useQueryHistory';
 import { useMCPClient } from '../hooks/useMCPClient';
@@ -24,6 +25,7 @@ import PromptPopover from './PromptPopover';
 import WriteQueryConfirmDialog from './WriteQueryConfirmDialog';
 import { isWriteQuery } from '../utils/queryClassify';
 import { sseChat } from '../utils/sseChat';
+import { conversationToMarkdown, downloadMarkdown } from '../lib/conversationExport';
 
 const MAX_AGENTIC_LOOPS = 50;
 // Compact if estimated tokens exceed this threshold.
@@ -444,6 +446,7 @@ const compactMessages = async (messages, sessionToken, maxTokens = 100000, recen
 const ChatInterface = ({ conversations }) => {
     const { sessionToken, forceLogout } = useAuth();
     const { setIsProcessing } = useLLMProcessing();
+    const { registerActions } = useConversationActions();
     const theme = useTheme();
     const isDark = theme.palette.mode === 'dark';
 
@@ -1173,10 +1176,10 @@ const ChatInterface = ({ conversations }) => {
         }
     }, [queryHistory]);
 
-    // Handle clear conversation
+    // Handle clear conversation. Confirmation is handled by the caller
+    // (the StatusBanner header menu shows a confirmation dialog), so this
+    // performs the clearing unconditionally.
     const handleClear = useCallback(() => {
-        if (!window.confirm('Clear conversation and start new?')) return;
-
         // Clear local state
         isLoadingRef.current = true;
         setMessages([]);
@@ -1190,6 +1193,24 @@ const ChatInterface = ({ conversations }) => {
         // Reset loading flag after state update
         setTimeout(() => { isLoadingRef.current = false; }, 100);
     }, [queryHistory, conversations]);
+
+    // Export the current conversation to a Markdown file. No-op when there
+    // are no messages to export.
+    const handleSaveConversation = useCallback(() => {
+        if (messages.length === 0) return;
+        const markdown = conversationToMarkdown(messages, { showActivity, debug });
+        const filename = `chat-history-${new Date().toISOString().slice(0, 10)}.md`;
+        downloadMarkdown(markdown, filename);
+    }, [messages, showActivity, debug]);
+
+    // Publish conversation-level actions to the StatusBanner header menu.
+    useEffect(() => {
+        registerActions({
+            hasMessages: messages.length > 0,
+            onSave: handleSaveConversation,
+            onClear: handleClear,
+        });
+    }, [messages.length, handleSaveConversation, handleClear, registerActions]);
 
     // Handle prompt selection
     const handlePromptClick = useCallback((event) => {
@@ -1660,9 +1681,6 @@ const ChatInterface = ({ conversations }) => {
                     isLoading={loading}
                     onPromptClick={handlePromptClick}
                     hasPrompts={prompts && prompts.length > 0}
-                    messages={messages}
-                    showActivity={showActivity}
-                    debug={debug}
                 />
 
                 <ProviderSelector
@@ -1680,8 +1698,6 @@ const ChatInterface = ({ conversations }) => {
                     onDebugChange={setDebug}
                     disabled={loading}
                     loadingModels={llmProviders.loadingModels}
-                    onClear={handleClear}
-                    hasMessages={messages.length > 0}
                 />
             </Paper>
 

@@ -22,6 +22,16 @@ import {
     useTheme,
     Tooltip,
     alpha,
+    Menu,
+    MenuItem,
+    ListItemIcon,
+    ListItemText,
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogContentText,
+    DialogActions,
+    Button,
 } from '@mui/material';
 import {
     CheckCircle as CheckCircleIcon,
@@ -30,10 +40,14 @@ import {
     ExpandLess as ExpandLessIcon,
     Storage as StorageIcon,
     Warning as WarningIcon,
+    MoreVert as MoreVertIcon,
+    SaveAlt as SaveIcon,
+    Delete as DeleteIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import { useLLMProcessing } from '../contexts/LLMProcessingContext';
 import { useDatabaseContext } from '../contexts/DatabaseContext';
+import { useConversationActions } from '../contexts/ConversationActionsContext';
 import { MCPClient } from '../lib/mcp-client';
 import DatabaseSelectorPopover from './DatabaseSelectorPopover';
 
@@ -46,14 +60,54 @@ const RETRY_DELAY_MS = 500;
 const StatusBanner = () => {
     const { sessionToken, forceLogout } = useAuth();
     const { isProcessing } = useLLMProcessing();
+    const { hasMessages, onSave, onClear } = useConversationActions();
     const theme = useTheme();
     const [systemInfo, setSystemInfo] = useState(null);
     const [expanded, setExpanded] = useState(false);
     const [error, setError] = useState('');
     const [dbPopoverAnchor, setDbPopoverAnchor] = useState(null);
     const [isSwitchingDatabase, setIsSwitchingDatabase] = useState(false);
+    const [actionsMenuAnchor, setActionsMenuAnchor] = useState(null);
+    const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
     const isDark = theme.palette.mode === 'dark';
+
+    // Conversation actions menu handlers
+    const handleActionsMenuOpen = (event) => {
+        setActionsMenuAnchor(event.currentTarget);
+    };
+
+    const handleActionsMenuClose = () => {
+        setActionsMenuAnchor(null);
+    };
+
+    const handleSaveClick = () => {
+        handleActionsMenuClose();
+        onSave?.();
+    };
+
+    const handleDeleteClick = () => {
+        handleActionsMenuClose();
+        setDeleteDialogOpen(true);
+    };
+
+    const handleConfirmDelete = () => {
+        onClear?.();
+        setDeleteDialogOpen(false);
+    };
+
+    const handleCancelDelete = () => {
+        setDeleteDialogOpen(false);
+    };
+
+    const dialogPaperProps = {
+        sx: {
+            bgcolor: isDark ? '#1E293B' : '#FFFFFF',
+            border: '1px solid',
+            borderColor: isDark ? '#334155' : '#E5E7EB',
+            borderRadius: 1,
+        },
+    };
 
     // Database management (shared context)
     const {
@@ -379,6 +433,74 @@ const StatusBanner = () => {
                             </span>
                         </Tooltip>
                     )}
+                    <Tooltip title="Conversation actions">
+                        <IconButton
+                            size="small"
+                            onClick={handleActionsMenuOpen}
+                            aria-label="Conversation actions"
+                            sx={{
+                                color: isDark ? '#94A3B8' : '#6B7280',
+                                mr: 0.5,
+                                '&:hover': {
+                                    bgcolor: isDark ? alpha('#22B8CF', 0.08) : alpha('#15AABF', 0.04),
+                                    color: '#15AABF',
+                                },
+                            }}
+                        >
+                            <MoreVertIcon fontSize="small" />
+                        </IconButton>
+                    </Tooltip>
+                    <Menu
+                        anchorEl={actionsMenuAnchor}
+                        open={Boolean(actionsMenuAnchor)}
+                        onClose={handleActionsMenuClose}
+                        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+                        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+                        slotProps={{
+                            paper: {
+                                sx: {
+                                    bgcolor: isDark ? '#1E293B' : '#FFFFFF',
+                                    border: '1px solid',
+                                    borderColor: isDark ? '#334155' : '#E5E7EB',
+                                    borderRadius: 1,
+                                    boxShadow: isDark
+                                        ? '0 10px 15px -3px rgba(0, 0, 0, 0.3)'
+                                        : '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
+                                },
+                            },
+                        }}
+                    >
+                        <MenuItem
+                            onClick={handleSaveClick}
+                            disabled={!hasMessages || !onSave}
+                            sx={{
+                                color: isDark ? '#F1F5F9' : '#1F2937',
+                                '&:hover': {
+                                    bgcolor: isDark ? alpha('#22B8CF', 0.08) : alpha('#15AABF', 0.04),
+                                },
+                            }}
+                        >
+                            <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                                <SaveIcon fontSize="small" />
+                            </ListItemIcon>
+                            <ListItemText primary="Save conversation" />
+                        </MenuItem>
+                        <MenuItem
+                            onClick={handleDeleteClick}
+                            disabled={!hasMessages || !onClear}
+                            sx={{
+                                color: isDark ? '#F87171' : '#DC2626',
+                                '&:hover': {
+                                    bgcolor: isDark ? alpha('#EF4444', 0.08) : alpha('#EF4444', 0.04),
+                                },
+                            }}
+                        >
+                            <ListItemIcon sx={{ color: 'inherit', minWidth: 36 }}>
+                                <DeleteIcon fontSize="small" />
+                            </ListItemIcon>
+                            <ListItemText primary="Delete conversation" />
+                        </MenuItem>
+                    </Menu>
                     <IconButton
                         size="small"
                         onClick={() => setExpanded(!expanded)}
@@ -664,6 +786,48 @@ const StatusBanner = () => {
                 loading={dbLoading}
                 error={dbError}
             />
+
+            {/* Delete Conversation Confirmation Dialog */}
+            <Dialog
+                open={deleteDialogOpen}
+                onClose={handleCancelDelete}
+                PaperProps={dialogPaperProps}
+            >
+                <DialogTitle sx={{ color: isDark ? '#F1F5F9' : '#1F2937' }}>
+                    Delete conversation
+                </DialogTitle>
+                <DialogContent>
+                    <DialogContentText sx={{ color: isDark ? '#94A3B8' : '#6B7280' }}>
+                        This clears the entire current conversation and starts a
+                        new one. This action cannot be undone.
+                    </DialogContentText>
+                </DialogContent>
+                <DialogActions sx={{ p: 2, pt: 0 }}>
+                    <Button
+                        onClick={handleCancelDelete}
+                        sx={{
+                            color: isDark ? '#94A3B8' : '#6B7280',
+                            textTransform: 'none',
+                        }}
+                    >
+                        Cancel
+                    </Button>
+                    <Button
+                        onClick={handleConfirmDelete}
+                        variant="contained"
+                        sx={{
+                            bgcolor: '#EF4444',
+                            color: '#FFFFFF',
+                            textTransform: 'none',
+                            '&:hover': {
+                                bgcolor: '#DC2626',
+                            },
+                        }}
+                    >
+                        Delete
+                    </Button>
+                </DialogActions>
+            </Dialog>
         </Paper>
     );
 };
