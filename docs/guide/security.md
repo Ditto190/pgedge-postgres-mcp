@@ -277,3 +277,43 @@ that way, as described in
 [Security Management](security_mgmt.md), and this class of attack
 cannot complete regardless of what any retrieved document says or
 which client is driving the server.
+
+## Provider Credentials in Error Messages
+
+An LLM or embedding provider decides what its own error responses say,
+and several of them quote the credential they rejected. OpenAI's reply
+to a failed authentication names the key it was given, in a partially
+masked form that still reveals its opening characters. The shared
+pgEdge LLM library relays a provider's message into the error it
+returns, so that text reaches anywhere the error is reported.
+
+The server removes credentials from such text before it leaves the
+process. Redaction applies in three places:
+
+- Responses from the `/api/llm/` endpoints, which the library's proxy
+  generates from the provider's message.
+- Trace entries, which persist in the file named by `-trace-file` and
+  are often attached to support tickets.
+- Errors that the CLI reports to its own operator, which may be
+  redirected to a log.
+
+Both the credentials the server was configured with and anything
+matching a known key format are replaced with `[REDACTED]`. The
+surrounding message survives, so the provider, the status code, and
+the reason for the failure are still reported.
+
+Understand the limits of this. Filtering the `/api/llm/` response is
+best-effort, not absolute: it inspects each write to the response body
+on its own, so a credential split across two writes would evade it.
+This does not arise for a JSON error body, which is encoded in one
+go, or a server-sent event, which is written as a unit, but it is a
+genuine limit of filtering a stream rather than fixing the source.
+Redaction is a filter over text that
+should not have contained a credential in the first place, so it
+recognises the formats this project knows about and the values it was
+given; a provider inventing a new format, or quoting a key in a way
+these patterns do not match, would not be caught. The durable fix
+belongs in the provider client library, so that a credential never
+reaches an error value at all. Treat this as a safety net beneath
+that, and continue to keep provider keys out of any output you
+publish.
