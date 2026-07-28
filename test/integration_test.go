@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -58,58 +60,257 @@ type MCPServer struct {
 	t      *testing.T
 }
 
-// StartMCPServer starts the MCP server binary for testing
-func StartMCPServer(t *testing.T, connString, apiKey string) (*MCPServer, error) {
-	// Find the binary
+// tlsDSNParams are the connection-string parameters that control how the
+// client validates the server's certificate. pgxpool.ParseConfig consumes
+// all four of these into a *tls.Config: the original strings, including a
+// verify-full/verify-ca sslmode and any sslcert/sslkey/sslrootcert file
+// paths, do not survive that parse. StartMCPServer needs the original
+// strings, not the parsed result, because it forwards them to the server
+// under test as PGSSL* environment variables rather than using pgx's parsed
+// config directly.
+var tlsDSNParams = []string{"sslmode", "sslcert", "sslkey", "sslrootcert"}
+
+// extractTLSParams reads the parameters in tlsDSNParams directly out of a
+// libpq connection string, in whichever of the two forms it takes: a
+// postgres:// or postgresql:// URI, with the parameters as query values, or
+// space-separated key=value pairs. Returns nil if none are present.
+func extractTLSParams(connString string) map[string]string {
+	trimmed := strings.TrimSpace(connString)
+	if strings.HasPrefix(trimmed, "postgres://") || strings.HasPrefix(trimmed, "postgresql://") {
+		u, err := url.Parse(trimmed)
+		if err != nil {
+			return nil
+		}
+		query := u.Query()
+		params := make(map[string]string)
+		for _, key := range tlsDSNParams {
+			if v := query.Get(key); v != "" {
+				params[key] = v
+			}
+		}
+		return params
+	}
+
+	// Keyword/value form: space-separated key=value pairs, value optionally
+	// wrapped in single quotes with backslash escapes. This covers the same
+	// syntax libpq itself accepts; a value can only contain an unescaped
+	// space by being quoted, so splitting on runs of whitespace outside
+	// quotes is enough for the four keys this function looks for.
+	params := make(map[string]string)
+	for _, field := range splitDSNFields(trimmed) {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			continue
+		}
+		value = strings.Trim(value, `'`)
+		value = strings.NewReplacer(`\'`, `'`, `\\`, `\`).Replace(value)
+		for _, wanted := range tlsDSNParams {
+			if strings.EqualFold(key, wanted) && value != "" {
+				params[wanted] = value
+			}
+		}
+	}
+	if len(params) == 0 {
+		return nil
+	}
+	return params
+}
+
+// splitDSNFields splits a keyword/value libpq connection string into its
+// key=value fields, treating single-quoted sections as atomic so a quoted
+// value containing whitespace is not split apart.
+func splitDSNFields(s string) []string {
+	var fields []string
+	var current strings.Builder
+	inQuotes := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '\\' && i+1 < len(s):
+			current.WriteByte(c)
+			i++
+			current.WriteByte(s[i])
+		case c == '\'':
+			inQuotes = !inQuotes
+			current.WriteByte(c)
+		case c == ' ' && !inQuotes:
+			if current.Len() > 0 {
+				fields = append(fields, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteByte(c)
+		}
+	}
+	if current.Len() > 0 {
+		fields = append(fields, current.String())
+	}
+	return fields
+}
+
+func TestExtractTLSParams(t *testing.T) {
+	tests := []struct {
+		name       string
+		connString string
+		want       map[string]string
+	}{
+		{
+			name:       "URI form, all four params",
+			connString: "postgresql://app:secret@example.com:5432/app?sslmode=verify-full&sslcert=/tmp/client.crt&sslkey=/tmp/client.key&sslrootcert=/tmp/root.crt",
+			want: map[string]string{
+				"sslmode":     "verify-full",
+				"sslcert":     "/tmp/client.crt",
+				"sslkey":      "/tmp/client.key",
+				"sslrootcert": "/tmp/root.crt",
+			},
+		},
+		{
+			name:       "URI form, no TLS params",
+			connString: "postgresql://app:secret@example.com:5432/app",
+			want:       nil,
+		},
+		{
+			name:       "URI form, sslmode only",
+			connString: "postgres://app@example.com/app?sslmode=require",
+			want:       map[string]string{"sslmode": "require"},
+		},
+		{
+			name:       "keyword/value form, all four params",
+			connString: "host=example.com port=5432 dbname=app user=app sslmode=verify-ca sslcert=/tmp/c.crt sslkey=/tmp/c.key sslrootcert=/tmp/root.crt",
+			want: map[string]string{
+				"sslmode":     "verify-ca",
+				"sslcert":     "/tmp/c.crt",
+				"sslkey":      "/tmp/c.key",
+				"sslrootcert": "/tmp/root.crt",
+			},
+		},
+		{
+			name:       "keyword/value form, quoted value with space",
+			connString: `host=example.com sslmode='verify-full' sslcert='/tmp/has space.crt'`,
+			want: map[string]string{
+				"sslmode": "verify-full",
+				"sslcert": "/tmp/has space.crt",
+			},
+		},
+		{
+			name:       "keyword/value form, no TLS params",
+			connString: "host=example.com port=5432 dbname=app",
+			want:       nil,
+		},
+		{
+			name:       "empty string",
+			connString: "",
+			want:       nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractTLSParams(tt.connString)
+			if len(got) != len(tt.want) {
+				t.Fatalf("extractTLSParams(%q) = %v, want %v", tt.connString, got, tt.want)
+			}
+			for k, v := range tt.want {
+				if got[k] != v {
+					t.Errorf("extractTLSParams(%q)[%q] = %q, want %q", tt.connString, k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
+// ensureServerBinary returns the path to the server binary, building it
+// first if it is not already present.
+func ensureServerBinary(t *testing.T) (string, error) {
 	binaryPath := filepath.Join("..", "bin", "pgedge-postgres-mcp")
 
-	// Check if binary exists, if not try to build it
 	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
 		t.Logf("Binary not found at %s, building...", binaryPath)
 		buildCmd := exec.Command("go", "build", "-o", binaryPath, "../cmd/pgedge-pg-mcp-svr")
 		buildCmd.Dir = filepath.Dir(binaryPath)
 		if output, err := buildCmd.CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("failed to build binary: %w\nOutput: %s", err, output)
+			return "", fmt.Errorf("failed to build binary: %w\nOutput: %s", err, output)
 		}
 	}
 
-	// Force stdio mode even if there's a config file with HTTP enabled
-	cmd := exec.Command(binaryPath, "-http=false")
+	return binaryPath, nil
+}
 
-	// Set up environment with database connection from connString
+// buildServerEnv returns the environment for the server process: the test's
+// own environment, the LLM API key, and, if connString parses, the PG*
+// variables the server reads to connect at startup.
+func buildServerEnv(t *testing.T, connString, apiKey string) []string {
 	env := append(os.Environ(),
 		"PGEDGE_ANTHROPIC_API_KEY="+apiKey,
 	)
-
-	// If connString is provided, parse it and set PG* environment variables
-	// The server will use these to connect at startup
-	if connString != "" {
-		// Use pgxpool to parse the connection string
-		config, err := pgxpool.ParseConfig(connString)
-		if err == nil {
-			if config.ConnConfig.Host != "" {
-				env = append(env, "PGHOST="+config.ConnConfig.Host)
-			}
-			if config.ConnConfig.Port != 0 {
-				env = append(env, fmt.Sprintf("PGPORT=%d", config.ConnConfig.Port))
-			}
-			if config.ConnConfig.Database != "" {
-				env = append(env, "PGDATABASE="+config.ConnConfig.Database)
-			}
-			if config.ConnConfig.User != "" {
-				env = append(env, "PGUSER="+config.ConnConfig.User)
-			}
-			if config.ConnConfig.Password != "" {
-				env = append(env, "PGPASSWORD="+config.ConnConfig.Password)
-			}
-			t.Logf("Setting database connection via PG* environment variables from connection string")
-		} else {
-			t.Logf("Warning: Failed to parse connection string: %v", err)
-		}
+	if connString == "" {
+		return env
 	}
 
-	cmd.Env = env
+	config, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		t.Logf("Warning: Failed to parse connection string: %v", err)
+		return env
+	}
 
+	env = append(env, pgConnEnvVars(config.ConnConfig)...)
+	// pgxpool.ParseConfig turns sslmode/sslcert/sslkey/sslrootcert into a
+	// *tls.Config and discards the original strings, so they are read back
+	// from connString directly rather than from the parsed config above.
+	// Without this, a verify-full or client-certificate DSN would start the
+	// server on the config default (sslmode: prefer) instead of the
+	// caller's setting.
+	for key, value := range extractTLSParams(connString) {
+		env = append(env, "PG"+strings.ToUpper(key)+"="+value)
+	}
+	t.Logf("Setting database connection via PG* environment variables from connection string")
+
+	return env
+}
+
+// pgConnEnvVars returns the PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD
+// entries for whichever of those fields config actually has set.
+func pgConnEnvVars(config *pgx.ConnConfig) []string {
+	var env []string
+	if config.Host != "" {
+		env = append(env, "PGHOST="+config.Host)
+	}
+	if config.Port != 0 {
+		env = append(env, fmt.Sprintf("PGPORT=%d", config.Port))
+	}
+	if config.Database != "" {
+		env = append(env, "PGDATABASE="+config.Database)
+	}
+	if config.User != "" {
+		env = append(env, "PGUSER="+config.User)
+	}
+	if config.Password != "" {
+		env = append(env, "PGPASSWORD="+config.Password)
+	}
+	return env
+}
+
+// StartMCPServer starts the MCP server binary for testing. Any extraArgs are
+// appended to the command line after the default "-http=false", so callers
+// can pass flags such as "-config <path>" to exercise non-default settings
+// (for example, pinning the connection pool size).
+func StartMCPServer(t *testing.T, connString, apiKey string, extraArgs ...string) (*MCPServer, error) {
+	binaryPath, err := ensureServerBinary(t)
+	if err != nil {
+		return nil, err
+	}
+
+	// Force stdio mode even if there's a config file with HTTP enabled
+	args := append([]string{"-http=false"}, extraArgs...)
+	cmd := exec.Command(binaryPath, args...)
+	cmd.Env = buildServerEnv(t, connString, apiKey)
+
+	return startServerProcess(t, cmd)
+}
+
+// startServerProcess wires up cmd's stdio pipes, starts it, and waits long
+// enough for the server to be ready to receive requests.
+func startServerProcess(t *testing.T, cmd *exec.Cmd) (*MCPServer, error) {
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stdin pipe: %w", err)
@@ -150,6 +351,39 @@ func StartMCPServer(t *testing.T, connString, apiKey string) (*MCPServer, error)
 	time.Sleep(500 * time.Millisecond)
 
 	return server, nil
+}
+
+// writeSingleConnPoolConfig writes a minimal server config file that pins the
+// default database's connection pool to exactly one connection, and returns
+// its path. Host, port, database, user, and password are deliberately left
+// at the same sentinel values applyEnvironmentVariables() checks for
+// (internal/config/config.go), so the PGHOST/PGPORT/PGDATABASE/PGUSER/
+// PGPASSWORD variables set by StartMCPServer from connString still take
+// effect; only pool_max_conns is actually forced by this file.
+//
+// This is used by tests that need to guarantee two successive requests are
+// served by the same pooled connection, such as verifying that session-level
+// tampering (e.g. RESET ALL) does not leak into a later request.
+func writeSingleConnPoolConfig(t *testing.T) string {
+	t.Helper()
+
+	const configYAML = `
+databases:
+  - name: default
+    host: localhost
+    port: 5432
+    database: postgres
+    sslmode: prefer
+    pool_max_conns: 1
+    pool_min_conns: 0
+    pool_max_conn_idle_time: 30m
+`
+
+	configPath := filepath.Join(t.TempDir(), "single-conn-pool.yaml")
+	if err := os.WriteFile(configPath, []byte(configYAML), 0o600); err != nil {
+		t.Fatalf("Failed to write test config file: %v", err)
+	}
+	return configPath
 }
 
 // SendRequest sends a JSON-RPC request and returns the response
@@ -852,6 +1086,218 @@ func TestReadOnlyProtection(t *testing.T) {
 			t.Errorf("Expected exactly 1 row in table, got %d - INSERT may have succeeded", count)
 		} else {
 			t.Log("✓ Table still contains exactly 1 row - no modification occurred")
+		}
+	})
+}
+
+// TestReadOnlyStatementSmuggling verifies that a caller cannot escape
+// read-only mode by appending statements to a query_database request.
+//
+// Each payload below was, at some point, a working bypass. They rely on
+// pgx falling back to the PostgreSQL simple query protocol when Exec is
+// given no bind parameters: that protocol accepts several
+// semicolon-separated statements in one message, so a caller could set a
+// read-write access mode, or commit the server's own read-only
+// transaction, before issuing a write. The final two payloads instead
+// attack the pooled connection's session state, so that a later request
+// inherits a writable session.
+//
+// This test requires only a database connection: query_database takes SQL
+// directly, so no LLM provider is involved.
+func TestReadOnlyStatementSmuggling(t *testing.T) {
+	connString := os.Getenv("TEST_PGEDGE_POSTGRES_CONNECTION_STRING")
+	if connString == "" {
+		t.Skip("TEST_PGEDGE_POSTGRES_CONNECTION_STRING not set")
+	}
+
+	// Pin the server's connection pool to a single connection. Two of the
+	// subtests below (session characteristics / RESET ALL) send a
+	// session-tampering request followed by a probe request and assert the
+	// probe was unaffected; that assertion only proves anything if both
+	// requests are guaranteed to be served by the very same pooled
+	// connection whose session state was tampered with.
+	configPath := writeSingleConnPoolConfig(t)
+
+	server, err := StartMCPServer(t, connString, "dummy-key-for-testing", "-config", configPath)
+	if err != nil {
+		t.Fatalf("Failed to start server: %v", err)
+	}
+	defer func() { _ = server.Close() }()
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, connString)
+	if err != nil {
+		t.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer pool.Close()
+
+	// Table names this test may create if a bypass succeeds. They are
+	// dropped before and after so a stale table cannot mask a failure.
+	targets := []string{
+		"ro_bypass_set_transaction",
+		"ro_bypass_commit_begin",
+		"ro_bypass_leading_comment",
+		"ro_bypass_session_characteristics",
+		"ro_bypass_reset_all",
+	}
+	dropTargets := func() {
+		for _, name := range targets {
+			_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS "+name) //nolint:errcheck // best-effort cleanup
+		}
+	}
+	dropTargets()
+	defer dropTargets()
+
+	// Control: confirm the configured role really can create a table when
+	// nothing is stopping it, so that a passing test means the guardrails
+	// worked rather than that the role was powerless all along.
+	if _, err := pool.Exec(ctx, "CREATE TABLE ro_bypass_control (i int)"); err != nil {
+		t.Skipf("configured role cannot create tables, so this test proves nothing: %v", err)
+	}
+	_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS ro_bypass_control") //nolint:errcheck // best-effort cleanup
+
+	runQuery := func(t *testing.T, sql string) {
+		t.Helper()
+		params := map[string]interface{}{
+			"name": "query_database",
+			"arguments": map[string]interface{}{
+				"query": sql,
+			},
+		}
+		if _, err := server.SendRequest("tools/call", params); err != nil {
+			t.Fatalf("Failed to send request: %v", err)
+		}
+		// The response is deliberately not asserted on. A rejection and a
+		// database error are both acceptable outcomes; what matters is the
+		// out-of-band check that no write took place.
+	}
+
+	// sessionReadOnlySetting reads default_transaction_read_only directly, on
+	// the same pooled connection, via query_database, as a more precise
+	// confirmation than the CREATE TABLE probe below that the session
+	// actually reads "on". It does not, on its own, isolate the AfterRelease
+	// hook: both RESET ALL and SET SESSION CHARACTERISTICS are now rejected
+	// by the statement guard before either ever reaches the database (see
+	// readonly_guard.go), so this GUC never actually gets poisoned by these
+	// two subtests in the first place, regardless of whether AfterRelease
+	// works. AfterRelease is tested directly, independent of the guard and
+	// of query_database's own per-transaction pgx.ReadOnly access mode, in
+	// TestAfterReleaseRestoresReadOnlyDefault
+	// (internal/database/connection_test.go), which poisons a connection
+	// through the raw pgx API rather than through any tool.
+	sessionReadOnlySetting := func(t *testing.T) string {
+		t.Helper()
+		params := map[string]interface{}{
+			"name": "query_database",
+			"arguments": map[string]interface{}{
+				"query": "SELECT current_setting('default_transaction_read_only') AS setting",
+			},
+		}
+		resp, err := server.SendRequest("tools/call", params)
+		if err != nil {
+			t.Fatalf("failed to read default_transaction_read_only: %v", err)
+		}
+		var result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		}
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			t.Fatalf("failed to unmarshal query_database response: %v", err)
+		}
+		if result.IsError || len(result.Content) == 0 {
+			t.Fatalf("failed to read default_transaction_read_only: %+v", result)
+		}
+		// The TSV body is the last line of the response text, following the
+		// "setting" header on the line before it.
+		lines := strings.Split(strings.TrimSpace(result.Content[0].Text), "\n")
+		return lines[len(lines)-1]
+	}
+
+	tableExists := func(t *testing.T, name string) bool {
+		t.Helper()
+		var exists bool
+		err := pool.QueryRow(ctx,
+			"SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = $1)",
+			name).Scan(&exists)
+		if err != nil {
+			t.Fatalf("Failed to check for table %s: %v", name, err)
+		}
+		return exists
+	}
+
+	t.Run("SET TRANSACTION READ WRITE then write", func(t *testing.T) {
+		runQuery(t, "SET TRANSACTION READ WRITE; CREATE TABLE ro_bypass_set_transaction (i int)")
+		if tableExists(t, "ro_bypass_set_transaction") {
+			t.Error("read-only bypassed: smuggled CREATE TABLE succeeded")
+		}
+	})
+
+	t.Run("COMMIT then BEGIN READ WRITE then write", func(t *testing.T) {
+		runQuery(t, "COMMIT; BEGIN READ WRITE; CREATE TABLE ro_bypass_commit_begin (i int); COMMIT")
+		if tableExists(t, "ro_bypass_commit_begin") {
+			t.Error("read-only bypassed: smuggled CREATE TABLE succeeded")
+		}
+	})
+
+	t.Run("leading comment reaches the smuggling path", func(t *testing.T) {
+		// No blocked keyword is needed to reach the vulnerable code path:
+		// a leading comment alone stops the statement being recognised as a
+		// SELECT, which was enough to route it through Exec.
+		runQuery(t, "/* not a select */ SELECT 1; CREATE TABLE ro_bypass_leading_comment (i int)")
+		if tableExists(t, "ro_bypass_leading_comment") {
+			t.Error("read-only bypassed: smuggled CREATE TABLE succeeded")
+		}
+	})
+
+	t.Run("session characteristics do not persist to a later request", func(t *testing.T) {
+		runQuery(t, "SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE")
+		// A separate request, which may well be served by the same pooled
+		// connection.
+		runQuery(t, "CREATE TABLE ro_bypass_session_characteristics (i int)")
+		if tableExists(t, "ro_bypass_session_characteristics") {
+			t.Error("read-only bypassed: session was left writable for a later request")
+		}
+		// The check above passes even if AfterRelease never restores the
+		// session default: query_database's own BeginTx requests
+		// pgx.ReadOnly regardless. Read the GUC directly to test AfterRelease
+		// itself, independent of that per-transaction protection.
+		if setting := sessionReadOnlySetting(t); setting != "on" {
+			t.Errorf("default_transaction_read_only = %q after release, want \"on\"; "+
+				"AfterRelease did not restore the session default", setting)
+		}
+	})
+
+	t.Run("RESET ALL does not persist to a later request", func(t *testing.T) {
+		runQuery(t, "RESET ALL")
+		runQuery(t, "CREATE TABLE ro_bypass_reset_all (i int)")
+		if tableExists(t, "ro_bypass_reset_all") {
+			t.Error("read-only bypassed: session default was cleared for a later request")
+		}
+		if setting := sessionReadOnlySetting(t); setting != "on" {
+			t.Errorf("default_transaction_read_only = %q after release, want \"on\"; "+
+				"AfterRelease did not restore the session default", setting)
+		}
+	})
+
+	// Ordinary read-only work must still function after all of the above.
+	t.Run("legitimate queries still work", func(t *testing.T) {
+		params := map[string]interface{}{
+			"name": "query_database",
+			"arguments": map[string]interface{}{
+				"query": "SELECT 42 AS answer",
+			},
+		}
+		resp, err := server.SendRequest("tools/call", params)
+		if err != nil {
+			t.Fatalf("Failed to send request: %v", err)
+		}
+		if resp.Error != nil {
+			t.Fatalf("SELECT should succeed, got error: %v", resp.Error.Message)
+		}
+		if !strings.Contains(string(resp.Result), "42") {
+			t.Errorf("expected the result to contain 42, got: %s", resp.Result)
 		}
 	})
 }
