@@ -109,6 +109,22 @@ func parseTrustedProxy(entry string) (netip.Prefix, error) {
 		if err != nil {
 			return netip.Prefix{}, fmt.Errorf("invalid trusted proxy CIDR %q: %w", entry, err)
 		}
+
+		// An IPv4-mapped IPv6 prefix such as ::ffff:192.0.2.0/120 describes a
+		// range of IPv4 addresses, and every candidate is unmapped before it is
+		// compared, so the prefix has to be unmapped as well. Without this,
+		// netip.Prefix.Contains rejects each candidate on the address family
+		// alone and the entry silently never matches: the configuration is
+		// accepted, no error is raised, and the forwarding header is quietly
+		// ignored, which is the most misleading way for this to fail. The
+		// mapped range occupies the final 32 bits, hence the shift of 96.
+		//
+		// A shorter prefix than /96 is left alone, because it spans more than
+		// the mapped-IPv4 range and so does not describe an IPv4 block.
+		if addr := prefix.Addr(); addr.Is4In6() && prefix.Bits() >= 96 {
+			prefix = netip.PrefixFrom(addr.Unmap(), prefix.Bits()-96)
+		}
+
 		// Masking discards any host bits, which ParsePrefix preserves but
 		// Contains ignores; normalising keeps comparisons predictable.
 		return prefix.Masked(), nil

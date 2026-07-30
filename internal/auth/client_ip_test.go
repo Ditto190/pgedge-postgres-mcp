@@ -353,6 +353,109 @@ func TestClientIPResolverHeaderSource(t *testing.T) {
 // TestClientIPResolverRotationCannotEvadeLimiter is the brute force case: with
 // the header honoured only from a trusted peer, a caller rotating the value it
 // sends still resolves to one stable address, so the rate limiter keeps counting.
+// TestClientIPResolverMappedCIDRTrustedProxy covers a trusted proxy written as
+// an IPv4-mapped IPv6 CIDR. Candidates are unmapped before comparison, so the
+// prefix must be unmapped too; otherwise netip.Prefix.Contains rejects every
+// candidate on the address family and the entry silently never matches, leaving
+// the operator with an accepted configuration whose header is ignored.
+func TestClientIPResolverMappedCIDRTrustedProxy(t *testing.T) {
+	tests := []struct {
+		name           string
+		trustedProxies []string
+		remoteAddr     string
+		want           string
+	}{
+		{
+			name:           "mapped CIDR trusts a plain IPv4 peer",
+			trustedProxies: []string{"::ffff:192.0.2.0/120"},
+			remoteAddr:     "192.0.2.1:44444",
+			want:           "198.51.100.7",
+		},
+		{
+			name:           "mapped CIDR trusts a mapped peer",
+			trustedProxies: []string{"::ffff:192.0.2.0/120"},
+			remoteAddr:     "[::ffff:192.0.2.1]:44444",
+			want:           "198.51.100.7",
+		},
+		{
+			// /120 mapped is a /24, so .255 is inside the block; the peer
+			// outside it has to differ in the third octet.
+			name:           "mapped CIDR still excludes an address outside it",
+			trustedProxies: []string{"::ffff:192.0.2.0/120"},
+			remoteAddr:     "192.0.3.1:44444",
+			want:           "192.0.3.1",
+		},
+		{
+			// ::ffff:0.0.0.0/96 unmaps to 0.0.0.0/0, which trusts every
+			// address, so each header entry counts as a trusted proxy too and
+			// the walk exhausts the list and falls back to the peer. Trusting
+			// everything therefore makes the header useless rather than
+			// authoritative, which is the safe direction to fail in.
+			name:           "trusting the whole mapped range falls back to the peer",
+			trustedProxies: []string{"::ffff:0.0.0.0/96"},
+			remoteAddr:     "203.0.113.5:44444",
+			want:           "203.0.113.5",
+		},
+		{
+			name:           "plain IPv4 CIDR is unaffected",
+			trustedProxies: []string{"192.0.2.0/24"},
+			remoteAddr:     "192.0.2.1:44444",
+			want:           "198.51.100.7",
+		},
+		{
+			name:           "a genuine IPv6 CIDR is unaffected",
+			trustedProxies: []string{"2001:db8::/32"},
+			remoteAddr:     "[2001:db8::1]:44444",
+			want:           "198.51.100.7",
+		},
+		{
+			name:           "a mapped prefix shorter than /96 is left as IPv6",
+			trustedProxies: []string{"::ffff:0.0.0.0/64"},
+			remoteAddr:     "192.0.2.1:44444",
+			want:           "192.0.2.1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver, err := NewClientIPResolver("header", "X-Forwarded-For", tt.trustedProxies)
+			if err != nil {
+				t.Fatalf("failed to build resolver: %v", err)
+			}
+			headers := map[string][]string{"X-Forwarded-For": {"9.9.9.9, 198.51.100.7"}}
+			if got := resolver.Resolve(newRequest(tt.remoteAddr, headers)); got != tt.want {
+				t.Errorf("Resolve() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParseTrustedProxyMappedCIDREquivalence checks that a mapped CIDR and its
+// plain IPv4 equivalent parse to exactly the same prefix, so the two spellings
+// cannot drift apart in behaviour.
+func TestParseTrustedProxyMappedCIDREquivalence(t *testing.T) {
+	pairs := [][2]string{
+		{"::ffff:192.0.2.0/120", "192.0.2.0/24"},
+		{"::ffff:10.0.0.0/104", "10.0.0.0/8"},
+		{"::ffff:0.0.0.0/96", "0.0.0.0/0"},
+	}
+
+	for _, pair := range pairs {
+		mapped, err := parseTrustedProxy(pair[0])
+		if err != nil {
+			t.Fatalf("parseTrustedProxy(%q): %v", pair[0], err)
+		}
+		plain, err := parseTrustedProxy(pair[1])
+		if err != nil {
+			t.Fatalf("parseTrustedProxy(%q): %v", pair[1], err)
+		}
+		if mapped != plain {
+			t.Errorf("parseTrustedProxy(%q) = %v, want it to equal parseTrustedProxy(%q) = %v",
+				pair[0], mapped, pair[1], plain)
+		}
+	}
+}
+
 func TestClientIPResolverRotationCannotEvadeLimiter(t *testing.T) {
 	resolver, err := NewClientIPResolver("header", "X-Forwarded-For", []string{"192.0.2.1"})
 	if err != nil {
