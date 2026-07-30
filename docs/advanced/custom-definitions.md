@@ -565,11 +565,40 @@ tools:
 #### PL/* Function Tools
 
 The `pl-func` type creates temporary PL/* functions with
-proper return types. These tools require `CREATE` permission
-on the database. The server creates the function, calls the
+proper return types. The server creates the function, calls the
 function, and drops the function automatically. Arguments
 arrive as a single `args` JSONB parameter. The `returns`
 field specifies the SQL return type.
+
+A `pl-func` tool has three separate requirements, and all three
+must be met before it will run:
+
+- The database role the server connects as needs `CREATE`
+  permission on the schema, because the tool creates and drops a
+  function on each call.
+
+- The tool's `language` must be listed in the
+  `allowed_pl_languages` setting for the target database, which is
+  a server-side configuration rather than a database privilege. The
+  default permits `plpgsql` only, so a tool written in any other
+  language is silently withheld until an operator adds that
+  language; see [Configuring Allowed
+  Languages](#configuring-allowed-languages) below.
+
+- The database connection itself needs `allow_writes: true`,
+  because creating and dropping the function is a catalogue write
+  regardless of what the tool's own SQL does. A `pl-func` tool
+  defined against a connection without `allow_writes` is refused
+  when called, naming that setting as the fix; use a `pl-do` tool
+  instead where the connection must stay read-only.
+
+Missing any one of the three leaves the tool unusable, and not
+always in the same way. A tool whose language is not allowed does
+not appear in `tools/list` at all, rather than appearing and then
+failing, so check the configuration first if a `pl-func` tool you
+have defined is missing. A tool that fails the `allow_writes`
+check behaves differently: it does appear in `tools/list`, and
+only fails, with the reason above, once something calls it.
 
 In the following example, the `pl-func` tool creates a
 temporary function that returns a table of row counts.
