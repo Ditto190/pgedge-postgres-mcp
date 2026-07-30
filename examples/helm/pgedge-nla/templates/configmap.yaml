@@ -23,13 +23,19 @@ data:
         max_failed_attempts_before_lockout: 5
         rate_limit_window_minutes: 15
         rate_limit_max_attempts: 10
-      # Requests reach the pod through a Service or Ingress, so set source to
-      # "header" and trust the ingress controller's addresses to have login
-      # rate limiting count against real client addresses rather than the proxy
+      # Requests reach the pod through a Service or Ingress, which becomes the
+      # peer on every connection. Populate server.clientIp.trustedProxies with
+      # the ingress controller's addresses to have login rate limiting count
+      # against real client addresses rather than against the proxy.
       client_ip:
+      {{- if .Values.server.clientIp.trustedProxies }}
+        source: header
+        header: {{ .Values.server.clientIp.header }}
+        trusted_proxies:
+          {{- toYaml .Values.server.clientIp.trustedProxies | nindent 10 }}
+      {{- else }}
         source: socket
-        header: X-Real-IP
-        trusted_proxies: []
+      {{- end }}
 
     llm:
       enabled: false
