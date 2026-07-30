@@ -11,6 +11,25 @@ and this project adheres to
 
 ### Security
 
+- Login rate limiting no longer counts against an address the caller can
+  choose. The server previously read the leftmost entry of
+  `X-Forwarded-For`, which is the part of that header a caller sets for
+  itself, so rotating the value defeated `rate_limit_max_attempts`
+  entirely, and sending someone else's address had their attempts counted
+  against them. The reverse proxy configurations in these docs appended to
+  the header rather than replacing it, so this needed no misconfiguration
+  to reproduce. Client addresses now come from the network connection by
+  default, and a new `http.client_ip` block opts into reading a forwarding
+  header, which is honoured only on connections from an address listed in
+  `client_ip.trusted_proxies`; `X-Forwarded-For` is read from right to
+  left, past trusted entries, and every instance of the header is treated
+  as one list. Candidate addresses that do not parse are discarded rather
+  than becoming rate limiter keys, and IPv6 addresses are no longer
+  counted twice under bracketed and unbracketed forms. Note that account
+  lockout is keyed on the username and was unaffected. The nginx examples
+  in the documentation now set `X-Forwarded-For` to `$remote_addr` rather
+  than `$proxy_add_x_forwarded_for`.
+
 - Upgraded `github.com/jackc/pgx/v5` from 5.7.6 to 5.10.0, resolving three
   advisories against the PostgreSQL driver. Two are memory-safety issues
   (GO-2026-4771/CVE-2026-33815 and GO-2026-4772/CVE-2026-33816, fixed in

@@ -56,6 +56,14 @@ Failed authentication attempts are tracked per IP address to prevent brute force
 - Automatic cleanup ensures that old attempts are automatically removed from memory.
 - Lockout is status-blind - rate limiting applies regardless of whether the username exists.
 
+The address a request is counted against comes from the network
+connection itself, so a caller cannot choose it. Deployments behind a
+reverse proxy see the proxy's address on every connection and must
+configure `http.client_ip` to read the real address from a forwarding
+header; the server honours that header only on connections from a
+trusted proxy. See [Client Address
+Resolution](configuration.md#client-address-resolution) for details.
+
 ### Configuring Rate Limiting and Lockout
 
 To configure lockout with a configuration file, add these properties to the file:

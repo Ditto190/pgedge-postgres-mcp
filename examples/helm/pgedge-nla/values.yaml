@@ -31,6 +31,16 @@ server:
   config:
     logLevel: info
 
+  # Client address resolution, used for login rate limiting and logging.
+  # Requests arrive through a Service or Ingress, so the connection's peer is
+  # the proxy rather than the caller. List the addresses or CIDR blocks your
+  # ingress controller connects from to have the server read the real client
+  # address from the header below; whilst trustedProxies is empty the server
+  # uses the connection's peer, which no caller can influence.
+  clientIp:
+    header: X-Real-IP
+    trustedProxies: []
+
   # PostgreSQL connection
   database:
     host: postgres-postgresql
