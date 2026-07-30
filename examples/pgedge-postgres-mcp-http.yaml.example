@@ -25,6 +25,15 @@ http:
         rate_limit_window_minutes: 15
         rate_limit_max_attempts: 10
 
+    # How the client address is determined, for rate limiting and logging.
+    # "socket" reads it from the connection and ignores forwarding headers.
+    # Behind a reverse proxy, set source to "header" and list the proxies
+    # entitled to set it; the header is ignored from any other peer.
+    client_ip:
+        source: socket
+        header: X-Real-IP
+        trusted_proxies: []
+
 # Database connection configuration
 # Multiple databases can be configured; each must have a unique name.
 # Use available_to_users to restrict access to specific users (empty = all users)

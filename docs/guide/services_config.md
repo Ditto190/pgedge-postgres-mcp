@@ -223,7 +223,7 @@ server {
         proxy_pass http://localhost:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
@@ -234,3 +234,27 @@ server {
     return 301 https://$host$request_uri;
 }
 ```
+
+Note that both `X-Real-IP` and `X-Forwarded-For` are set to
+`$remote_addr`, which replaces whatever the caller sent. The more
+commonly seen `$proxy_add_x_forwarded_for` appends to the caller's
+value instead, leaving an address of the caller's choosing at the head
+of the list; use it only where a trusted proxy sits in front of nginx
+and you have accounted for the extra hop.
+
+Behind this proxy, configure the server to read the client address from
+the header rather than from the connection, which now always belongs to
+nginx:
+
+```yaml
+http:
+  client_ip:
+    source: header
+    header: X-Real-IP
+    trusted_proxies:
+      - 127.0.0.1
+```
+
+Without this, login rate limiting counts every request against the
+proxy's address rather than the caller's. See [Client Address
+Resolution](configuration.md#client-address-resolution) for details.

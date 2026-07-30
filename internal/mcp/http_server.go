@@ -39,6 +39,7 @@ type HTTPConfig struct {
 	AuthEnabled   bool                           // Enable API token authentication
 	TokenStore    *auth.TokenStore               // Token store for authentication
 	UserStore     *auth.UserStore                // User store for session token authentication
+	ClientIP      *auth.ClientIPResolver         // Resolves the client address; nil means socket only
 	SetupHandlers func(mux *http.ServeMux) error // Optional callback to add custom handlers before auth middleware
 	Debug         bool                           // Enable debug logging
 }
@@ -73,6 +74,10 @@ func (s *Server) buildHandler(config *HTTPConfig) (http.Handler, error) {
 
 	// Wrap with security headers middleware
 	handler = securityHeadersMiddleware(config.TLSEnable)(handler)
+
+	// Resolve the client address once, outside authentication, so that the rate
+	// limiter and the request log attribute a request to the same address
+	handler = auth.ClientIPMiddleware(config.ClientIP)(handler)
 
 	// Wrap with panic recovery so a handler panic always yields a JSON
 	// 500 response instead of an abruptly closed connection with no body.
@@ -229,9 +234,15 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract IP address and add to context
-	ipAddress := auth.ExtractIPAddress(r)
-	ctx := context.WithValue(r.Context(), auth.IPAddressContextKey, ipAddress)
+	// The client address is resolved by ClientIPMiddleware; fall back to the
+	// connection's peer for callers that invoke this handler directly, such as
+	// tests that bypass the middleware chain
+	ctx := r.Context()
+	ipAddress := auth.GetIPAddressFromContext(ctx)
+	if ipAddress == "" {
+		ipAddress = auth.ExtractIPAddress(r)
+		ctx = context.WithValue(ctx, auth.IPAddressContextKey, ipAddress)
+	}
 
 	// Limit request body size to prevent memory exhaustion attacks
 	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBodySize)

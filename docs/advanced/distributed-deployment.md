@@ -109,8 +109,7 @@ server {
         proxy_pass http://mcp_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For
-            $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
@@ -123,6 +122,25 @@ server {
 The `upstream` block defines the pool of backend servers. The
 `/health` endpoint enables load balancer health checks without
 authentication.
+
+Both forwarding headers are set to `$remote_addr` so that they replace
+any value the caller sent; `$proxy_add_x_forwarded_for` would append to
+it instead. Each backend then needs to read the client address from the
+header, trusting the load balancer that fronts it:
+
+```yaml
+http:
+  client_ip:
+    source: header
+    header: X-Real-IP
+    trusted_proxies:
+      - 192.0.2.0/24        # The subnet the load balancers run in
+```
+
+Every backend sees the load balancer as its peer, so without this
+setting all login rate limiting collapses onto one address. For
+details, see [Client Address
+Resolution](../guide/configuration.md#client-address-resolution).
 
 ### AWS Application Load Balancer
 

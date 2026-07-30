@@ -94,32 +94,17 @@ func writeJSONError(w http.ResponseWriter, message string, statusCode int) {
 	json.NewEncoder(w).Encode(JSONErrorResponse{Error: message})
 }
 
-// ExtractIPAddress extracts the client IP address from an HTTP request
-// Checks X-Forwarded-For and X-Real-IP headers first (for proxies), then falls back to RemoteAddr
+// ExtractIPAddress returns the address of the peer that opened the connection,
+// ignoring forwarding headers entirely.
+//
+// Forwarding headers are deliberately not consulted here: a caller can set them
+// for itself, and the reverse proxy configurations we document append to
+// X-Forwarded-For rather than replacing it, so its leftmost entry is whatever
+// the caller chose to send. Deployments behind a proxy opt into reading a header
+// through http.client_ip, which honours it only from a trusted peer; see
+// ClientIPResolver.
 func ExtractIPAddress(r *http.Request) string {
-	// Check X-Forwarded-For header first (used by proxies/load balancers)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// X-Forwarded-For can contain multiple IPs (client, proxy1, proxy2, ...)
-		// Use the first one (original client IP)
-		parts := strings.Split(xff, ",")
-		if len(parts) > 0 {
-			return strings.TrimSpace(parts[0])
-		}
-	}
-
-	// Check X-Real-IP header (used by some proxies)
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
-	}
-
-	// Fall back to RemoteAddr
-	// This may include the port, so strip it if present
-	ip := r.RemoteAddr
-	if colonIndex := strings.LastIndex(ip, ":"); colonIndex != -1 {
-		ip = ip[:colonIndex]
-	}
-
-	return ip
+	return (*ClientIPResolver)(nil).Resolve(r)
 }
 
 // AuthMiddleware creates an HTTP middleware that validates API tokens and session tokens

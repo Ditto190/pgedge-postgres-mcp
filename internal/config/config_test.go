@@ -909,6 +909,150 @@ func TestSetStringFromEnv(t *testing.T) {
 	}
 }
 
+func TestSetStringSliceFromEnv(t *testing.T) {
+	const key = "TEST_STRING_SLICE_VAR"
+
+	tests := []struct {
+		name     string
+		envValue string
+		initial  []string
+		expected []string
+	}{
+		{
+			name:     "single entry",
+			envValue: "192.0.2.1",
+			expected: []string{"192.0.2.1"},
+		},
+		{
+			name:     "multiple entries",
+			envValue: "192.0.2.1,192.0.2.2",
+			expected: []string{"192.0.2.1", "192.0.2.2"},
+		},
+		{
+			name:     "surrounding whitespace is trimmed",
+			envValue: " 192.0.2.1 , 192.0.2.0/24 ",
+			expected: []string{"192.0.2.1", "192.0.2.0/24"},
+		},
+		{
+			name:     "empty entries are dropped",
+			envValue: "192.0.2.1,,192.0.2.2,",
+			expected: []string{"192.0.2.1", "192.0.2.2"},
+		},
+		{
+			name:     "the variable replaces a configured list",
+			envValue: "192.0.2.9",
+			initial:  []string{"198.51.100.1", "198.51.100.2"},
+			expected: []string{"192.0.2.9"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			os.Setenv(key, tt.envValue)
+			defer os.Unsetenv(key)
+
+			dest := tt.initial
+			setStringSliceFromEnv(&dest, key)
+
+			if len(dest) != len(tt.expected) {
+				t.Fatalf("expected %v, got %v", tt.expected, dest)
+			}
+			for i, want := range tt.expected {
+				if dest[i] != want {
+					t.Errorf("entry %d: expected %q, got %q", i, want, dest[i])
+				}
+			}
+		})
+	}
+
+	// An unset variable must leave any configured list alone
+	os.Unsetenv(key)
+	dest := []string{"198.51.100.1"}
+	setStringSliceFromEnv(&dest, key)
+	if len(dest) != 1 || dest[0] != "198.51.100.1" {
+		t.Errorf("expected the configured list to be unchanged, got %v", dest)
+	}
+}
+
+func TestClientIPConfigDefaults(t *testing.T) {
+	cfg := defaultConfig()
+
+	if cfg.HTTP.ClientIP.Source != "socket" {
+		t.Errorf("expected the default client IP source to be 'socket', got %q", cfg.HTTP.ClientIP.Source)
+	}
+	if cfg.HTTP.ClientIP.Header != "X-Real-IP" {
+		t.Errorf("expected the default client IP header to be 'X-Real-IP', got %q", cfg.HTTP.ClientIP.Header)
+	}
+	if len(cfg.HTTP.ClientIP.TrustedProxies) != 0 {
+		t.Errorf("expected no trusted proxies by default, got %v", cfg.HTTP.ClientIP.TrustedProxies)
+	}
+}
+
+func TestMergeClientIPConfig(t *testing.T) {
+	dest := defaultConfig()
+	src := &Config{
+		HTTP: HTTPConfig{
+			ClientIP: ClientIPConfig{
+				Source:         "header",
+				Header:         "X-Forwarded-For",
+				TrustedProxies: []string{"192.0.2.1", "192.0.2.0/24"},
+			},
+		},
+	}
+
+	mergeConfig(dest, src)
+
+	if dest.HTTP.ClientIP.Source != "header" {
+		t.Errorf("expected source 'header', got %q", dest.HTTP.ClientIP.Source)
+	}
+	if dest.HTTP.ClientIP.Header != "X-Forwarded-For" {
+		t.Errorf("expected header 'X-Forwarded-For', got %q", dest.HTTP.ClientIP.Header)
+	}
+	if len(dest.HTTP.ClientIP.TrustedProxies) != 2 {
+		t.Fatalf("expected 2 trusted proxies, got %v", dest.HTTP.ClientIP.TrustedProxies)
+	}
+
+	// An empty source must not clear a value already merged in
+	mergeConfig(dest, &Config{})
+	if dest.HTTP.ClientIP.Source != "header" {
+		t.Errorf("expected source to remain 'header', got %q", dest.HTTP.ClientIP.Source)
+	}
+	if len(dest.HTTP.ClientIP.TrustedProxies) != 2 {
+		t.Errorf("expected trusted proxies to remain, got %v", dest.HTTP.ClientIP.TrustedProxies)
+	}
+}
+
+func TestApplyEnvironmentVariables_ClientIP(t *testing.T) {
+	vars := map[string]string{
+		"PGEDGE_HTTP_CLIENT_IP_SOURCE":          "header",
+		"PGEDGE_HTTP_CLIENT_IP_HEADER":          "X-Forwarded-For",
+		"PGEDGE_HTTP_CLIENT_IP_TRUSTED_PROXIES": "192.0.2.1, 192.0.2.0/24",
+	}
+	for key, value := range vars {
+		os.Setenv(key, value)
+		defer os.Unsetenv(key)
+	}
+
+	cfg := defaultConfig()
+	applyEnvironmentVariables(cfg)
+
+	if cfg.HTTP.ClientIP.Source != "header" {
+		t.Errorf("expected source 'header', got %q", cfg.HTTP.ClientIP.Source)
+	}
+	if cfg.HTTP.ClientIP.Header != "X-Forwarded-For" {
+		t.Errorf("expected header 'X-Forwarded-For', got %q", cfg.HTTP.ClientIP.Header)
+	}
+	expected := []string{"192.0.2.1", "192.0.2.0/24"}
+	if len(cfg.HTTP.ClientIP.TrustedProxies) != len(expected) {
+		t.Fatalf("expected %v, got %v", expected, cfg.HTTP.ClientIP.TrustedProxies)
+	}
+	for i, want := range expected {
+		if cfg.HTTP.ClientIP.TrustedProxies[i] != want {
+			t.Errorf("entry %d: expected %q, got %q", i, want, cfg.HTTP.ClientIP.TrustedProxies[i])
+		}
+	}
+}
+
 func TestSetBoolFromEnv(t *testing.T) {
 	tests := []struct {
 		envValue string

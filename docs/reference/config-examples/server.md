@@ -103,6 +103,32 @@ http:
         # - List tokens:  ./bin/pgedge-postgres-mcp -list-tokens
         # - Remove token: ./bin/pgedge-postgres-mcp -remove-token <id>
 
+    # Client address resolution, used for login rate limiting and logging
+    client_ip:
+        # Where the client address is read from
+        # "socket" takes it from the network connection and ignores
+        #          forwarding headers; correct when clients connect directly
+        # "header" takes it from the header below, but only when the
+        #          connection comes from a trusted proxy listed underneath
+        # Default: socket
+        # Environment variable: PGEDGE_HTTP_CLIENT_IP_SOURCE
+        source: socket
+
+        # Forwarding header consulted when source is "header"
+        # X-Forwarded-For is also supported and is read from right to left,
+        # skipping trusted proxies, because each proxy appends to it
+        # Default: X-Real-IP
+        # Environment variable: PGEDGE_HTTP_CLIENT_IP_HEADER
+        header: X-Real-IP
+
+        # Addresses or CIDR blocks permitted to set that header; the header is
+        # ignored on connections from anywhere else. Required when source is
+        # "header", as the server otherwise refuses to start
+        # Default: empty (no proxy is trusted)
+        # Environment variable: PGEDGE_HTTP_CLIENT_IP_TRUSTED_PROXIES
+        #                       (comma-separated)
+        trusted_proxies: []
+
 # ============================================================================
 # ENCRYPTION SECRET FILE (Optional)
 # ============================================================================

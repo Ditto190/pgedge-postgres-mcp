@@ -797,6 +797,24 @@ func main() {
 
 	if cfg.HTTP.Enabled {
 		// HTTP/HTTPS mode
+		// Decide how the client address is determined before serving anything,
+		// so that a configuration which cannot be honoured safely fails at
+		// startup rather than silently falling back at request time. The error
+		// has its own variable because err carries the server's exit status for
+		// the remainder of this block and must not be shadowed here.
+		clientIPResolver, clientIPErr := auth.NewClientIPResolver(
+			cfg.HTTP.ClientIP.Source,
+			cfg.HTTP.ClientIP.Header,
+			cfg.HTTP.ClientIP.TrustedProxies)
+		if clientIPErr != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: Invalid client IP configuration: %v\n", clientIPErr)
+			os.Exit(1)
+		}
+		if strings.EqualFold(cfg.HTTP.ClientIP.Source, auth.ClientIPSourceHeader) {
+			fmt.Fprintf(os.Stderr, "Client addresses read from %s, trusting %d proxy entries\n",
+				cfg.HTTP.ClientIP.Header, len(cfg.HTTP.ClientIP.TrustedProxies))
+		}
+
 		// Create HTTP server configuration
 		httpConfig := &mcp.HTTPConfig{
 			Addr:        cfg.HTTP.Address,
@@ -807,6 +825,7 @@ func main() {
 			AuthEnabled: cfg.HTTP.Auth.Enabled,
 			TokenStore:  tokenStore,
 			UserStore:   userStore,
+			ClientIP:    clientIPResolver,
 			Debug:       *debug,
 		}
 

@@ -145,10 +145,25 @@ func (c *PromptsConfig) IsPromptEnabled(promptName string) bool {
 
 // HTTPConfig holds HTTP/HTTPS server settings
 type HTTPConfig struct {
-	Enabled bool       `yaml:"enabled"`
-	Address string     `yaml:"address"`
-	TLS     TLSConfig  `yaml:"tls"`
-	Auth    AuthConfig `yaml:"auth"`
+	Enabled  bool           `yaml:"enabled"`
+	Address  string         `yaml:"address"`
+	TLS      TLSConfig      `yaml:"tls"`
+	Auth     AuthConfig     `yaml:"auth"`
+	ClientIP ClientIPConfig `yaml:"client_ip"`
+}
+
+// ClientIPConfig controls how the server decides which address a request came
+// from, for rate limiting and request logging.
+//
+// The default reads the address from the connection itself, which is correct for
+// a server that is not behind a reverse proxy and cannot be influenced by the
+// caller. Deployments behind a proxy set Source to "header" and list the proxies
+// they trust; a forwarding header is never honoured from an untrusted peer,
+// because its contents are otherwise chosen by whoever sent the request.
+type ClientIPConfig struct {
+	Source         string   `yaml:"source"`          // "socket" (the default) or "header"
+	Header         string   `yaml:"header"`          // Header read when source is "header" (default: X-Real-IP)
+	TrustedProxies []string `yaml:"trusted_proxies"` // Addresses or CIDR blocks permitted to set that header
 }
 
 // AuthConfig holds authentication settings
@@ -640,6 +655,11 @@ func defaultConfig() *Config {
 				RateLimitWindowMinutes:         15,   // 15 minute window for rate limiting
 				RateLimitMaxAttempts:           10,   // 10 attempts per IP per window
 			},
+			ClientIP: ClientIPConfig{
+				Source:         "socket",    // Trust the connection, not the caller's headers
+				Header:         "X-Real-IP", // Only consulted when source is "header"
+				TrustedProxies: nil,         // No proxy is trusted until an operator names one
+			},
 		},
 		Databases: []NamedDatabaseConfig{}, // Empty by default, populated from config file
 		Embedding: EmbeddingConfig{
@@ -731,6 +751,18 @@ func mergeConfig(dest, src *Config) {
 	}
 	if src.HTTP.Auth.RateLimitMaxAttempts > 0 {
 		dest.HTTP.Auth.RateLimitMaxAttempts = src.HTTP.Auth.RateLimitMaxAttempts
+	}
+
+	// Client IP resolution
+	if src.HTTP.ClientIP.Source != "" {
+		dest.HTTP.ClientIP.Source = src.HTTP.ClientIP.Source
+	}
+	if src.HTTP.ClientIP.Header != "" {
+		dest.HTTP.ClientIP.Header = src.HTTP.ClientIP.Header
+	}
+	// Replace rather than append, so a config file can narrow an inherited list
+	if len(src.HTTP.ClientIP.TrustedProxies) > 0 {
+		dest.HTTP.ClientIP.TrustedProxies = src.HTTP.ClientIP.TrustedProxies
 	}
 
 	// Databases - if source has databases defined, use them (replace, don't merge)
@@ -927,6 +959,24 @@ func setStringFromEnv(dest *string, key string) {
 	}
 }
 
+// setStringSliceFromEnv sets a string slice config value from a comma-separated
+// environment variable if it exists, ignoring empty entries and surrounding
+// whitespace. The variable replaces any configured list rather than adding to it.
+func setStringSliceFromEnv(dest *[]string, key string) {
+	val := os.Getenv(key)
+	if val == "" {
+		return
+	}
+
+	entries := make([]string, 0, strings.Count(val, ",")+1)
+	for _, entry := range strings.Split(val, ",") {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			entries = append(entries, entry)
+		}
+	}
+	*dest = entries
+}
+
 // setStringFromEnvWithFallback sets a string config value from an environment variable,
 // checking multiple environment variable names in priority order
 func setStringFromEnvWithFallback(dest *string, keys ...string) {
@@ -1007,6 +1057,11 @@ func applyEnvironmentVariables(cfg *Config) {
 	setIntFromEnv(&cfg.HTTP.Auth.MaxFailedAttemptsBeforeLockout, "PGEDGE_AUTH_MAX_FAILED_ATTEMPTS_BEFORE_LOCKOUT")
 	setIntFromEnv(&cfg.HTTP.Auth.RateLimitWindowMinutes, "PGEDGE_AUTH_RATE_LIMIT_WINDOW_MINUTES")
 	setIntFromEnv(&cfg.HTTP.Auth.RateLimitMaxAttempts, "PGEDGE_AUTH_RATE_LIMIT_MAX_ATTEMPTS")
+
+	// Client IP resolution
+	setStringFromEnv(&cfg.HTTP.ClientIP.Source, "PGEDGE_HTTP_CLIENT_IP_SOURCE")
+	setStringFromEnv(&cfg.HTTP.ClientIP.Header, "PGEDGE_HTTP_CLIENT_IP_HEADER")
+	setStringSliceFromEnv(&cfg.HTTP.ClientIP.TrustedProxies, "PGEDGE_HTTP_CLIENT_IP_TRUSTED_PROXIES")
 
 	// Database environment variables apply to the first database in the list
 	// If no databases configured yet, create a default one from env vars

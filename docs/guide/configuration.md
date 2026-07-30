@@ -44,6 +44,49 @@ specify property values, grouped by section.
 | `http.auth.max_failed_attempts_before_lockout` | N/A | `PGEDGE_AUTH_MAX_FAILED_ATTEMPTS_BEFORE_LOCKOUT` | Lock account after N failed attempts (0 = disabled, default: 0) |
 | `http.auth.rate_limit_window_minutes` | N/A | `PGEDGE_AUTH_RATE_LIMIT_WINDOW_MINUTES` | Time window for rate limiting in minutes (default: 15) |
 | `http.auth.rate_limit_max_attempts` | N/A | `PGEDGE_AUTH_RATE_LIMIT_MAX_ATTEMPTS` | Max failed attempts per IP per window (default: 10) |
+| `http.client_ip.source` | N/A | `PGEDGE_HTTP_CLIENT_IP_SOURCE` | Where the client address is read from; `socket` or `header` (default: "socket") |
+| `http.client_ip.header` | N/A | `PGEDGE_HTTP_CLIENT_IP_HEADER` | Forwarding header read when the source is `header` (default: "X-Real-IP") |
+| `http.client_ip.trusted_proxies` | N/A | `PGEDGE_HTTP_CLIENT_IP_TRUSTED_PROXIES` | Comma-separated addresses or CIDR blocks permitted to set that header |
+
+### Client Address Resolution
+
+The server attributes each request to a client address, which it uses
+for login rate limiting and request logging. The `http.client_ip`
+settings control where that address comes from.
+
+By default, the source is `socket`; the server takes the address from
+the network connection and ignores forwarding headers entirely. This
+default is correct for a server that clients reach directly, and a
+caller cannot influence it.
+
+Deployments behind a reverse proxy see the proxy's address on every
+connection, so they need the real address from a forwarding header
+instead. Set the source to `header` and list the proxies you trust:
+
+```yaml
+http:
+  client_ip:
+    source: header
+    header: X-Real-IP
+    trusted_proxies:
+      - 192.0.2.10          # A single proxy address
+      - 192.0.2.0/24        # Or a CIDR block
+```
+
+The server honours the header only when the connection comes from one
+of the listed proxies; a request that arrives from anywhere else is
+attributed to its own connection address. Starting the server with the
+source set to `header` and no trusted proxies configured is an error,
+because a forwarding header carries no authority unless the server
+knows which peer is entitled to set it.
+
+`X-Forwarded-For` also works as the header, and the server handles it
+as the history list it is. Each proxy appends the address it received
+the request from, so the server reads the list from right to left,
+skipping entries that match `trusted_proxies` and taking the first one
+that does not. Reading from the left instead would return whatever the
+original caller chose to send, since anything a caller invents ends up
+at the far left of the list.
 
 ### Database Connections
 

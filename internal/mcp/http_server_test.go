@@ -19,6 +19,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"pgedge-postgres-mcp/internal/auth"
 )
 
 func TestHandleHealthCheck(t *testing.T) {
@@ -1148,6 +1150,76 @@ func TestBuildHandler_KnownRouteStillWorks(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected the JSON 404 catch-all to not shadow /health; got status %d", w.Code)
+	}
+}
+
+// TestBuildHandler_ClientIPResolution checks that the handler chain resolves the
+// client address once and makes it available to handlers, so that the login rate
+// limiter and the request log agree on where a request came from.
+func TestBuildHandler_ClientIPResolution(t *testing.T) {
+	resolver, err := auth.NewClientIPResolver("header", "X-Forwarded-For", []string{"192.0.2.1"})
+	if err != nil {
+		t.Fatalf("failed to build client IP resolver: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		resolver   *auth.ClientIPResolver
+		remoteAddr string
+		forwarded  string
+		want       string
+	}{
+		{
+			name:       "trusted proxy chain yields the appended client address",
+			resolver:   resolver,
+			remoteAddr: "192.0.2.1:44444",
+			forwarded:  "9.9.9.9, 198.51.100.7",
+			want:       "198.51.100.7",
+		},
+		{
+			name:       "a direct caller cannot choose its own address",
+			resolver:   resolver,
+			remoteAddr: "203.0.113.5:44444",
+			forwarded:  "9.9.9.9",
+			want:       "203.0.113.5",
+		},
+		{
+			name:       "no resolver configured means the connection peer is used",
+			resolver:   nil,
+			remoteAddr: "203.0.113.5:44444",
+			forwarded:  "9.9.9.9",
+			want:       "203.0.113.5",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tools := &mockToolProvider{}
+			server := NewServer(tools)
+
+			var seen string
+			handler, err := server.buildHandler(&HTTPConfig{
+				ClientIP: tt.resolver,
+				SetupHandlers: func(mux *http.ServeMux) error {
+					mux.HandleFunc("/client-ip", func(w http.ResponseWriter, r *http.Request) {
+						seen = auth.GetIPAddressFromContext(r.Context())
+					})
+					return nil
+				},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error building handler: %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "/client-ip", nil)
+			req.RemoteAddr = tt.remoteAddr
+			req.Header.Set("X-Forwarded-For", tt.forwarded)
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+
+			if seen != tt.want {
+				t.Errorf("resolved client address = %q, want %q", seen, tt.want)
+			}
+		})
 	}
 }
 
