@@ -184,6 +184,36 @@ and this project adheres to
   otherwise be exactly as nondeterministic as before this fix. Fixes
   #211.
 
+- `initialize` no longer echoes back whatever `protocolVersion` a client
+  requests. Version negotiation is the server's half of the MCP
+  handshake: the client proposes a revision, and the server is supposed
+  to reply with the revision it will actually speak, which the client
+  then checks against what it supports. Echoing the request answers
+  with no information at all, so a client asking for a revision this
+  server does not implement was told that revision was accepted, and
+  found out otherwise later, against a missing capability, rather than
+  at the version check meant to catch exactly this case. `initialize`
+  (stdio) and `initialize` over HTTP now both call a shared
+  `NegotiateProtocolVersion`, which returns the newest revision this
+  server supports at or below the client's request, or the oldest
+  supported revision if the request predates everything the server
+  implements. This server currently implements one revision,
+  `2024-11-05`, so today every negotiation converges on that value
+  regardless of what a client asked for; the function is structured to
+  extend cleanly if a second revision is added later. The bundled CLI
+  and web client are unaffected, since both already request
+  `2024-11-05` exactly.
+
+  `initialize` over HTTP also now rejects malformed parameters with a
+  proper `-32602 Invalid params` error, matching every other HTTP handler
+  and the stdio transport's existing behaviour. The HTTP handler
+  previously never read the client's parameters at all, so it accepted
+  anything; it now parses them, and a field of the wrong JSON type, such
+  as a numeric `protocolVersion` or a `clientInfo` that is not an object,
+  fails the handshake instead of silently falling back to the server's
+  default. Omitting the parameters entirely still succeeds and yields
+  that default. Fixes #212.
+
 ### Added
 
 - A `make vulncheck` target runs `govulncheck` over the module, using
