@@ -594,6 +594,151 @@ func TestHandlePing_Stdio_WithID(t *testing.T) {
 	}
 }
 
+// TestHandlePing_Stdio_Modern_HasResultType is the regression test for
+// a human review finding on PR #215: every other stdio handler was
+// moved onto sendResponseFor, but handlePing was left calling the bare
+// sendResponse, so a modern ping returned {} with no resultType --
+// the base specification is unconditional that every modern result
+// must carry one. Goes through handleRequest (not handlePing directly)
+// so the dispatch path -- including the modern preflight gate -- is
+// exercised too.
+func TestHandlePing_Stdio_Modern_HasResultType(t *testing.T) {
+	server := NewServer(&mockToolProvider{})
+	req := JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Method:  "ping",
+		Params: map[string]interface{}{
+			"_meta": map[string]interface{}{
+				"io.modelcontextprotocol/protocolVersion":    "2026-07-28",
+				"io.modelcontextprotocol/clientCapabilities": map[string]interface{}{},
+			},
+		},
+	}
+
+	out := captureStdout(t, func() {
+		server.handleRequest(req)
+	})
+
+	var resp JSONRPCResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("failed to decode response %q: %v", out, err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error in response: %v", resp.Error)
+	}
+	result, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+	if result["resultType"] != "complete" {
+		t.Errorf("resultType = %v, want %q -- modern ping must carry it like every other modern result", result["resultType"], "complete")
+	}
+}
+
+// TestServerDiscover_LegacyShapedRequestAlsoWorks is the regression test
+// for a self-audit finding: handleRequest once special-cased
+// server/discover, skipping modern validation for it on the theory that
+// a client probing for supported versions cannot be expected to already
+// know one. That exemption was removed because it was unnecessary: a
+// server/discover call with no _meta at all is legacy-shaped, exactly
+// like any other method, and reaches handleDiscover without any
+// validation gate applying in the first place. This drives the call
+// through handleRequest itself (not handleDiscover directly), so it
+// exercises the validation gate that was the site of the fix.
+func TestServerDiscover_LegacyShapedRequestAlsoWorks(t *testing.T) {
+	server := NewServer(&mockToolProvider{})
+	req := JSONRPCRequest{JSONRPC: "2.0", ID: float64(1), Method: "server/discover"}
+
+	out := captureStdout(t, func() {
+		server.handleRequest(req)
+	})
+
+	var resp JSONRPCResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("failed to decode response %q: %v", out, err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error in response: %v", resp.Error)
+	}
+	result, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+	if versions, ok := result["supportedVersions"].([]interface{}); !ok || len(versions) == 0 {
+		t.Errorf("supportedVersions = %v, want a non-empty list", result["supportedVersions"])
+	}
+}
+
+// TestServerDiscover_ModernRequestMissingClientCapabilities_Rejected
+// covers the other side of the same fix: a server/discover call that
+// does carry _meta.protocolVersion (so it is modern-shaped) is no longer
+// exempt from validation, and must be rejected the same way any other
+// modern method would be when it omits the required clientCapabilities
+// field.
+func TestServerDiscover_ModernRequestMissingClientCapabilities_Rejected(t *testing.T) {
+	server := NewServer(&mockToolProvider{})
+	req := JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Method:  "server/discover",
+		Params: map[string]interface{}{
+			"_meta": map[string]interface{}{
+				"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+			},
+		},
+	}
+
+	out := captureStdout(t, func() {
+		server.handleRequest(req)
+	})
+
+	var resp JSONRPCResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("failed to decode response %q: %v", out, err)
+	}
+	if resp.Error == nil || resp.Error.Code != -32602 {
+		t.Fatalf("error = %+v, want code -32602 (Invalid params)", resp.Error)
+	}
+}
+
+// TestHandleRequest_ModernInitialize_RejectedAsMethodNotFound covers a
+// CodeRabbit review finding on PR #215: "initialize" does not exist as
+// a method under the modern (2026-07-28) era, which removed the
+// handshake entirely, so a modern-shaped request naming it must be
+// rejected the same way any other method the modern era doesn't
+// recognize would be (-32601), not answered with a legacy
+// InitializeResult. Uses fully valid modern _meta (matching protocol
+// version, non-nil clientCapabilities) so the rejection is specifically
+// about the method, not an incidental preflight failure.
+func TestHandleRequest_ModernInitialize_RejectedAsMethodNotFound(t *testing.T) {
+	server := NewServer(&mockToolProvider{})
+	req := JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2024-11-05",
+			"_meta": map[string]interface{}{
+				"io.modelcontextprotocol/protocolVersion":    "2026-07-28",
+				"io.modelcontextprotocol/clientCapabilities": map[string]interface{}{},
+			},
+		},
+	}
+
+	out := captureStdout(t, func() {
+		server.handleRequest(req)
+	})
+
+	var resp JSONRPCResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("failed to decode response %q: %v", out, err)
+	}
+	if resp.Error == nil || resp.Error.Code != -32601 {
+		t.Fatalf("error = %+v, want code -32601 (Method not found)", resp.Error)
+	}
+}
+
 // TestHandleInitialize_Stdio_NegotiatesProtocolVersion is the regression
 // test for issue #212 on the stdio transport: a client requesting a
 // revision this server does not implement must get back a revision the

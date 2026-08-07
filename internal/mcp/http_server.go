@@ -319,11 +319,55 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle the request and capture the response (pass context with IP address)
-	response := s.handleRequestHTTP(ctx, req)
+	// A request carrying io.modelcontextprotocol/protocolVersion in its
+	// _meta -- or, on this transport, just an MCP-Protocol-Version
+	// header, which no pre-2025-06-18 client ever sends -- is modern
+	// (2026-07-28, stateless per-request negotiation); a request with
+	// neither, including every initialize handshake, is legacy and
+	// reaches handleRequestHTTP exactly as before this server added
+	// modern support. See isModernHTTP in modern.go.
+	//
+	// preflightRejected distinguishes a rejection at this stage (header
+	// mismatch, missing required _meta field, unsupported version) from
+	// one a handler itself produces after dispatch: every preflight
+	// rejection is spec-mandated HTTP 400 for a modern request, while a
+	// handler's own -32602 (e.g. a tool call's own argument validation)
+	// keeps this server's existing HTTP 200 convention. Both can carry
+	// the same JSON-RPC code, so the code alone cannot distinguish them.
+	meta, isModern := isModernHTTP(r, req.Params)
+	var response JSONRPCResponse
+	preflightRejected := false
+	if isModern {
+		if rpcErr := validateModernRequestHTTP(r, req, meta); rpcErr != nil {
+			response = JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: rpcErr}
+			preflightRejected = true
+		}
+	}
+	if !preflightRejected {
+		response = s.handleRequestHTTP(ctx, req)
+		if isModern && response.Error == nil {
+			response.Result = wrapModernResultForMethod(req.Method, response.Result)
+		}
+	}
+
+	// A modern request answered with -32601 (Method not found) gets
+	// 404, not the usual 200: the transport spec is explicit that this
+	// pairing is what lets a client tell a modern server that simply
+	// doesn't implement a method apart from a legacy HTTP+SSE server
+	// that doesn't host this endpoint at all (both could otherwise
+	// produce a bare 404). This is a handler-level rejection like any
+	// other -32601, not a preflight one, so it is checked independently
+	// of preflightRejected.
+	statusCode := http.StatusOK
+	switch {
+	case isModern && preflightRejected:
+		statusCode = http.StatusBadRequest
+	case isModern && response.Error != nil && response.Error.Code == -32601:
+		statusCode = http.StatusNotFound
+	}
 
 	tracing.LogHTTPResponse(sessionID, tokenHash, requestID,
-		r.Method, "/mcp/v1", http.StatusOK, nil,
+		r.Method, "/mcp/v1", statusCode, nil,
 		time.Since(httpStart))
 
 	// Debug logging: log outgoing response
@@ -335,7 +379,7 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Send response
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(statusCode)
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: Failed to encode response: %v\n", err)
@@ -351,7 +395,18 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRequestHTTP(ctx context.Context, req JSONRPCRequest) JSONRPCResponse {
 	switch req.Method {
 	case "initialize":
+		// "initialize" does not exist as a method in the modern era
+		// (2026-07-28 removed the handshake entirely), so a
+		// modern-shaped request naming it is treated exactly like any
+		// other method the modern era doesn't recognize: -32601, not
+		// a legacy InitializeResult. See the stdio equivalent in
+		// handleRequest (server.go) for the same reasoning.
+		if _, isModern := isModernRequest(req.Params); isModern {
+			return createErrorResponse(req.ID, -32601, "Method not found", nil)
+		}
 		return s.handleInitializeHTTP(req)
+	case "server/discover":
+		return s.handleDiscoverHTTP(req)
 	case "ping":
 		return JSONRPCResponse{
 			JSONRPC: "2.0",
@@ -391,23 +446,9 @@ func (s *Server) handleInitializeHTTP(req JSONRPCRequest) JSONRPCResponse {
 		return createErrorResponse(req.ID, -32602, "Invalid params", err.Error())
 	}
 
-	capabilities := map[string]interface{}{
-		"tools": map[string]interface{}{},
-	}
-
-	// Add resources capability if resource provider is set
-	if s.resources != nil {
-		capabilities["resources"] = map[string]interface{}{}
-	}
-
-	// Add prompts capability if prompt provider is set
-	if s.prompts != nil {
-		capabilities["prompts"] = map[string]interface{}{}
-	}
-
 	result := InitializeResult{
 		ProtocolVersion: NegotiateProtocolVersion(params.ProtocolVersion),
-		Capabilities:    capabilities,
+		Capabilities:    s.buildCapabilities(),
 		ServerInfo: Implementation{
 			Name:    ServerName,
 			Version: ServerVersion,
@@ -415,6 +456,23 @@ func (s *Server) handleInitializeHTTP(req JSONRPCRequest) JSONRPCResponse {
 		Instructions: ServerInstructions,
 	}
 
+	return JSONRPCResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result:  result,
+	}
+}
+
+// handleDiscoverHTTP implements server/discover over HTTP; see
+// handleDiscover (server.go) for the stdio equivalent and rationale.
+func (s *Server) handleDiscoverHTTP(req JSONRPCRequest) JSONRPCResponse {
+	result := DiscoverResult{
+		CacheableResult:   cacheableResult(),
+		SupportedVersions: SupportedModernProtocolVersions,
+		Capabilities:      s.buildCapabilities(),
+		Meta:              responseMetaFor(),
+		Instructions:      ServerInstructions,
+	}
 	return JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
@@ -515,6 +573,9 @@ func (s *Server) handleResourceReadHTTP(ctx context.Context, req JSONRPCRequest)
 	tracing.LogResourceResult(sessionID, tokenHash, resRequestID,
 		params.URI, content, err, time.Since(start))
 
+	if errors.Is(err, ErrResourceNotFound) {
+		return createErrorResponse(req.ID, resourceNotFoundCode(req), "Resource not found", params.URI)
+	}
 	if err != nil {
 		return createErrorResponse(req.ID, -32603, "Failed to read resource", err.Error())
 	}

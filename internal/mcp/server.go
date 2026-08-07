@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -211,9 +212,38 @@ func (s *Server) Run() error {
 // path here corresponds to a request that requires a response — including
 // requests whose id is explicitly null.
 func (s *Server) handleRequest(req JSONRPCRequest) {
+	// A request carrying io.modelcontextprotocol/protocolVersion in its
+	// _meta is modern and validated uniformly here, including
+	// server/discover: the spec's header/negotiation rules name no
+	// exception for it, and none is needed in practice, since a client
+	// that does not yet know what to send can simply omit _meta
+	// entirely -- handleDiscover answers a request shaped that way
+	// exactly as fully as a validated modern one (see
+	// TestServerDiscover_LegacyShapedRequestAlsoWorks). A real modern
+	// client never sends "initialize" (2026-07-28 has no handshake), so
+	// this is the same check below.
+	meta, isModern := isModernRequest(req.Params)
+	if isModern {
+		if rpcErr := validateModernRequestStdio(meta); rpcErr != nil {
+			sendError(req.ID, rpcErr.Code, rpcErr.Message, rpcErr.Data)
+			return
+		}
+	}
+
 	switch req.Method {
 	case "initialize":
+		// "initialize" does not exist as a method in the modern era
+		// (2026-07-28 removed the handshake entirely), so a
+		// modern-shaped request naming it is treated exactly like any
+		// other method the modern era doesn't recognize: -32601, not
+		// a legacy InitializeResult.
+		if isModern {
+			sendError(req.ID, -32601, "Method not found", nil)
+			return
+		}
 		s.handleInitialize(req)
+	case "server/discover":
+		s.handleDiscover(req)
 	case "ping":
 		s.handlePing(req)
 	case "tools/list":
@@ -237,6 +267,30 @@ func (s *Server) handleRequest(req JSONRPCRequest) {
 	}
 }
 
+// buildCapabilities returns this server's capabilities object, shared by
+// the legacy initialize handshake, server/discover, and their HTTP
+// equivalents. The empty "extensions" map is always present per the
+// 2026-07-28 versioning spec's extension-negotiation convention; this
+// server implements no extensions, so it is always empty rather than
+// omitted, to distinguish "no extensions supported" from "capabilities
+// not yet reported" for a client checking the key.
+func (s *Server) buildCapabilities() map[string]interface{} {
+	capabilities := map[string]interface{}{
+		"tools":      map[string]interface{}{},
+		"extensions": map[string]interface{}{},
+	}
+
+	if s.resources != nil {
+		capabilities["resources"] = map[string]interface{}{}
+	}
+
+	if s.prompts != nil {
+		capabilities["prompts"] = map[string]interface{}{}
+	}
+
+	return capabilities
+}
+
 func (s *Server) handleInitialize(req JSONRPCRequest) {
 	paramsBytes, err := json.Marshal(req.Params)
 	if err != nil {
@@ -251,23 +305,9 @@ func (s *Server) handleInitialize(req JSONRPCRequest) {
 
 	protocolVersion := NegotiateProtocolVersion(params.ProtocolVersion)
 
-	capabilities := map[string]interface{}{
-		"tools": map[string]interface{}{},
-	}
-
-	// Add resources capability if resource provider is set
-	if s.resources != nil {
-		capabilities["resources"] = map[string]interface{}{}
-	}
-
-	// Add prompts capability if prompt provider is set
-	if s.prompts != nil {
-		capabilities["prompts"] = map[string]interface{}{}
-	}
-
 	result := InitializeResult{
 		ProtocolVersion: protocolVersion,
-		Capabilities:    capabilities,
+		Capabilities:    s.buildCapabilities(),
 		ServerInfo: Implementation{
 			Name:    ServerName,
 			Version: ServerVersion,
@@ -278,12 +318,29 @@ func (s *Server) handleInitialize(req JSONRPCRequest) {
 	sendResponse(req.ID, result)
 }
 
+// handleDiscover implements server/discover (stdio transport), which
+// the 2026-07-28 revision requires every server to implement: it lets a
+// modern client learn this server's supported protocol versions,
+// capabilities, and identity without a connection-scoped handshake. See
+// modern.go for the version list and cacheableResult/responseMetaFor
+// helpers shared with every other modern result.
+func (s *Server) handleDiscover(req JSONRPCRequest) {
+	result := DiscoverResult{
+		CacheableResult:   cacheableResult(),
+		SupportedVersions: SupportedModernProtocolVersions,
+		Capabilities:      s.buildCapabilities(),
+		Meta:              responseMetaFor(),
+		Instructions:      ServerInstructions,
+	}
+	sendResponse(req.ID, result)
+}
+
 // handlePing replies with the standard empty-object result. Notifications
 // are filtered out by Run before reaching dispatch, so every ping that
 // arrives here is a request requiring a response — including one whose
 // id is explicitly null.
 func (s *Server) handlePing(req JSONRPCRequest) {
-	sendResponse(req.ID, map[string]interface{}{})
+	sendResponseFor(req, map[string]interface{}{}, false)
 }
 
 func (s *Server) handleToolsList(req JSONRPCRequest) {
@@ -295,7 +352,7 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 		"tools": tools,
 	}
 
-	sendResponse(req.ID, result)
+	sendResponseFor(req, result, true)
 }
 
 func (s *Server) handleToolCall(req JSONRPCRequest) {
@@ -326,7 +383,7 @@ func (s *Server) handleToolCall(req JSONRPCRequest) {
 		return
 	}
 
-	sendResponse(req.ID, response)
+	sendResponseFor(req, response, false)
 }
 
 func (s *Server) handleResourcesList(req JSONRPCRequest) {
@@ -341,7 +398,7 @@ func (s *Server) handleResourcesList(req JSONRPCRequest) {
 		"resources": resources,
 	}
 
-	sendResponse(req.ID, result)
+	sendResponseFor(req, result, true)
 }
 
 func (s *Server) handleResourceRead(req JSONRPCRequest) {
@@ -371,12 +428,16 @@ func (s *Server) handleResourceRead(req JSONRPCRequest) {
 	tracing.LogResourceResult(s.stdioSessionID, "", requestID,
 		params.URI, content, err, time.Since(start))
 
+	if errors.Is(err, ErrResourceNotFound) {
+		sendError(req.ID, resourceNotFoundCode(req), "Resource not found", params.URI)
+		return
+	}
 	if err != nil {
 		sendError(req.ID, -32603, "Resource read error", err.Error())
 		return
 	}
 
-	sendResponse(req.ID, content)
+	sendResponseFor(req, content, true)
 }
 
 func (s *Server) handlePromptsList(req JSONRPCRequest) {
@@ -391,7 +452,7 @@ func (s *Server) handlePromptsList(req JSONRPCRequest) {
 		Prompts: prompts,
 	}
 
-	sendResponse(req.ID, result)
+	sendResponseFor(req, result, true)
 }
 
 func (s *Server) handlePromptsGet(req JSONRPCRequest) {
@@ -426,7 +487,7 @@ func (s *Server) handlePromptsGet(req JSONRPCRequest) {
 		return
 	}
 
-	sendResponse(req.ID, result)
+	sendResponseFor(req, result, false)
 }
 
 // ListDatabasesResponse is the response for pgedge/listDatabases
@@ -466,7 +527,7 @@ func (s *Server) handleListDatabases(req JSONRPCRequest) {
 		Current:   current,
 	}
 
-	sendResponse(req.ID, result)
+	sendResponseFor(req, result, false)
 }
 
 func (s *Server) handleSelectDatabase(req JSONRPCRequest) {
@@ -497,7 +558,7 @@ func (s *Server) handleSelectDatabase(req JSONRPCRequest) {
 			Success: false,
 			Error:   err.Error(),
 		}
-		sendResponse(req.ID, result)
+		sendResponseFor(req, result, false)
 		return
 	}
 
@@ -510,6 +571,23 @@ func (s *Server) handleSelectDatabase(req JSONRPCRequest) {
 		Message: fmt.Sprintf("Switched to database: %s", params.Name),
 	}
 
+	sendResponseFor(req, result, false)
+}
+
+// sendResponseFor sends a handler's result, wrapping it with modern
+// (2026-07-28) fields first if the originating request was modern. Every
+// stdio handler except handleInitialize and handleDiscover (which build
+// their own response shape directly, and are never subject to this
+// wrapping) calls this instead of the bare sendResponse, so the
+// modern/legacy branch lives in one place rather than in each handler.
+func sendResponseFor(req JSONRPCRequest, result interface{}, cacheable bool) {
+	if _, isModern := isModernRequest(req.Params); isModern {
+		if cacheable {
+			result = wrapModernCacheableResult(result)
+		} else {
+			result = wrapModernResult(result)
+		}
+	}
 	sendResponse(req.ID, result)
 }
 

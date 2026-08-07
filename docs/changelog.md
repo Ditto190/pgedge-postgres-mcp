@@ -203,8 +203,37 @@ and this project adheres to
   configured with, so it is a safety net rather than a guarantee. See
   [Security](guide/security.md) for the limits.
 
+- A malformed `Mcp-Name` header could crash the request handler with a
+  panic instead of being rejected cleanly. The Streamable HTTP transport's
+  Base64 sentinel encoding (`=?base64?<encoded>?=`) is unwrapped by
+  checking for a matching prefix and suffix before slicing out the
+  encoded middle; the prefix and suffix share a `?`, so a value shorter
+  than their combined length (e.g. the literal `=?base64?=`) could match
+  both checks by overlapping on that character, producing a
+  negative-length slice. `recoveryMiddleware` catches the panic and
+  returns a `500` rather than taking the server down, but the correct
+  response to a malformed header is the spec-mandated `400
+  HeaderMismatch`, not an internal error with a stack trace logged for
+  every occurrence. `decodeHeaderValue` (`internal/mcp/modern.go`) now
+  checks the value is at least as long as the two delimiters combined
+  before matching against them.
+
 ### Fixed
 
+- `resources/read` on an unknown URI now returns a real JSON-RPC error
+  instead of a disguised success. Both resource registries
+  (`internal/resources/registry.go` and the `ContextAwareRegistry`
+  actually wired into the server) returned a "successful" result whose
+  content was a `"Resource not found: ..."` text block, on every
+  revision this server has ever shipped; per the MCP spec, an unknown
+  resource URI is a protocol-level error (`-32002` for a legacy
+  request, `-32602` for a modern one -- see the `Added` entry below).
+  `ContextAwareRegistry.Read` also now checks whether a URI is even a
+  recognised resource *before* acquiring a database client, rather
+  than after: previously, reading an unknown URI without a working
+  database connection returned a database-error message instead of a
+  not-found one, since acquiring a client came first regardless of
+  whether the resource existed at all.
 - The conversation actions menu in the status banner header no longer
   offers a "Delete conversation" item that does not delete anything. That
   action resets the chat window and starts a new conversation; it never
@@ -310,6 +339,39 @@ and this project adheres to
   that default. Fixes #212.
 
 ### Added
+
+- The server now implements the current MCP specification revision,
+  `2026-07-28`, alongside its original revision, `2024-11-05`, on both
+  transports at once (dual-era, per the versioning spec's own
+  guidance). A request whose `params._meta` carries
+  `io.modelcontextprotocol/protocolVersion` is served under the new,
+  stateless model: `server/discover` (required by the spec for every
+  server), per-request `_meta` negotiation in place of the removed
+  `initialize` handshake, `resultType`/`ttlMs`/`cacheScope` on results,
+  and the Streamable HTTP transport's required
+  `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Name` headers. A request
+  without that `_meta` field, including every `initialize` handshake
+  -- which covers the bundled CLI and web client, and every existing
+  integration test -- is served exactly as before this change, with no
+  observable difference. Conversely, an `initialize` request that does
+  carry that `_meta` field is rejected with `-32601 Method not found`
+  on both transports, matching the modern era's method set, which has
+  no handshake to answer -- and, on HTTP, this and every other
+  `-32601` for a modern request now pairs with HTTP `404`, per the
+  transport spec's own reasoning: it is what lets a client tell this
+  server apart from a legacy HTTP+SSE server that doesn't host the
+  endpoint at all. A present `MCP-Protocol-Version` header now also
+  marks an HTTP request modern even when its body doesn't, since no
+  client older than `2025-06-18` ever sends that header; a modern
+  `ping` over stdio now carries `resultType` like every other modern
+  result, matching what it already carried over HTTP. See [MCP
+  Specification
+  Compliance](developers/mcp-spec-compliance.md) for the full
+  negotiation rules and, importantly, what was deliberately not
+  adopted from this revision and why (`subscriptions/listen`, Multi
+  Round-Trip Requests/Roots/Sampling/Elicitation, `x-mcp-header`,
+  OAuth-related changes, and icons): none of them have anything for
+  this server to attach to today.
 
 - A `make vulncheck` target runs `govulncheck` over the module, using
   call-graph analysis to prioritize known vulnerabilities that this code can
