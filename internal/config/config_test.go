@@ -1034,6 +1034,107 @@ func TestClientIPConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestAllowedOriginsDefaults(t *testing.T) {
+	cfg := defaultConfig()
+
+	// Empty is meaningful: it selects the loopback-only policy that keeps
+	// a default deployment safe from DNS rebinding without any
+	// configuration at all.
+	if len(cfg.HTTP.AllowedOrigins) != 0 {
+		t.Errorf("expected no configured origins by default, got %v", cfg.HTTP.AllowedOrigins)
+	}
+}
+
+func TestMergeAllowedOrigins(t *testing.T) {
+	dest := defaultConfig()
+	src := &Config{
+		HTTP: HTTPConfig{
+			AllowedOrigins: []string{"https://mcp.example.com"},
+		},
+	}
+
+	mergeConfig(dest, src)
+
+	if len(dest.HTTP.AllowedOrigins) != 1 || dest.HTTP.AllowedOrigins[0] != "https://mcp.example.com" {
+		t.Fatalf("expected the configured origin to be merged, got %v", dest.HTTP.AllowedOrigins)
+	}
+
+	// An empty list must not clear a value already merged in, or a later
+	// partial config file would silently narrow the policy back to
+	// loopback and lock out the deployment's own web client.
+	mergeConfig(dest, &Config{})
+	if len(dest.HTTP.AllowedOrigins) != 1 {
+		t.Errorf("expected the configured origin to remain, got %v", dest.HTTP.AllowedOrigins)
+	}
+}
+
+func TestApplyEnvironmentVariables_AllowedOrigins(t *testing.T) {
+	os.Setenv("PGEDGE_HTTP_ALLOWED_ORIGINS", "https://a.example, https://b.example")
+	defer os.Unsetenv("PGEDGE_HTTP_ALLOWED_ORIGINS")
+
+	cfg := defaultConfig()
+	applyEnvironmentVariables(cfg)
+
+	expected := []string{"https://a.example", "https://b.example"}
+	if len(cfg.HTTP.AllowedOrigins) != len(expected) {
+		t.Fatalf("expected %v, got %v", expected, cfg.HTTP.AllowedOrigins)
+	}
+	for i, want := range expected {
+		if cfg.HTTP.AllowedOrigins[i] != want {
+			t.Errorf("origin %d = %q, want %q", i, cfg.HTTP.AllowedOrigins[i], want)
+		}
+	}
+}
+
+func TestApplyEnvironmentVariables_AllowedOriginsMalformedValues(t *testing.T) {
+	// A malformed value must reach NewOriginPolicy intact so startup can
+	// refuse it and say why. Silently reducing "," to an empty list would
+	// select the loopback-only default, leaving the operator running a
+	// policy they never asked for; that fails closed rather than open, but
+	// it is still not the policy they configured.
+	malformed := []struct {
+		name  string
+		value string
+	}{
+		{"only a comma", ","},
+		{"trailing comma", "https://a.example,"},
+		{"blank between commas", "https://a.example,,https://b.example"},
+		{"whitespace only", "   "},
+	}
+
+	for _, tt := range malformed {
+		t.Run(tt.name, func(t *testing.T) {
+			os.Setenv("PGEDGE_HTTP_ALLOWED_ORIGINS", tt.value)
+			defer os.Unsetenv("PGEDGE_HTTP_ALLOWED_ORIGINS")
+
+			cfg := defaultConfig()
+			applyEnvironmentVariables(cfg)
+
+			if tt.name == "whitespace only" {
+				// Indistinguishable from unset, so the default stands.
+				if len(cfg.HTTP.AllowedOrigins) != 0 {
+					t.Errorf("expected a whitespace-only value to be treated as unset, got %v",
+						cfg.HTTP.AllowedOrigins)
+				}
+				return
+			}
+
+			// Every other case must retain a blank entry, which is what
+			// makes it an error rather than an empty list.
+			blanks := 0
+			for _, origin := range cfg.HTTP.AllowedOrigins {
+				if origin == "" {
+					blanks++
+				}
+			}
+			if blanks == 0 {
+				t.Errorf("expected a blank entry to survive for %q, got %v",
+					tt.value, cfg.HTTP.AllowedOrigins)
+			}
+		})
+	}
+}
+
 func TestMergeClientIPConfig(t *testing.T) {
 	dest := defaultConfig()
 	src := &Config{
