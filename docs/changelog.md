@@ -9,6 +9,28 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Google Gemini now works as an embedding provider, alongside Voyage AI,
+  OpenAI, and Ollama. Set `embedding.provider` to `gemini` and supply a
+  key through `gemini_api_key_file`, `gemini_api_key`, or the
+  `PGEDGE_GEMINI_API_KEY` and `GEMINI_API_KEY` environment variables; the
+  optional `gemini_base_url` setting and the
+  `PGEDGE_GEMINI_EMBEDDING_BASE_URL` variable route requests through a
+  proxy. The knowledgebase gains the matching `embedding_gemini_api_key`,
+  `embedding_gemini_api_key_file`, and `embedding_gemini_base_url`
+  settings, together with the `PGEDGE_KB_GEMINI_API_KEY` and
+  `PGEDGE_KB_GEMINI_BASE_URL` variables, and accepts `gemini` as an
+  `embedding_provider`. The default model is `gemini-embedding-001`,
+  which produces 3072 dimensions. Because the embedding and LLM
+  configurations read the same key variables, a single Gemini key now
+  drives both chat and embeddings. Knowledgebase search reads the
+  `gemini_embedding` column, so it needs a `kb.db` built with Gemini;
+  searching a knowledgebase that holds another provider's vectors now
+  reports the mismatch instead of returning meaningless scores, and
+  databases built before the column existed continue to work with the
+  other providers.
+
 ### Changed
 
 - Dependencies across every ecosystem this project uses are now on their
@@ -53,6 +75,21 @@ and this project adheres to
   which is forwarded only when present.
 
 ### Fixed
+
+- Switching `embedding.provider` (or `knowledgebase.embedding_provider`)
+  away from Ollama without also setting a model no longer sends the
+  Ollama model name to the new provider. `defaultConfig` seeded both
+  `Embedding.Model` and `Knowledgebase.EmbeddingModel` with Ollama's
+  `nomic-embed-text` as part of the shared baseline, and `mergeConfig`
+  only overwrites a field when the loaded config sets it, so that value
+  survived untouched for a config that named a provider alone. Each
+  provider's own model default in `newEmbedClient` only applies when the
+  model is empty, so it never got the chance to run: a live request
+  with Gemini configured this way sent model `nomic-embed-text` and was
+  confirmed to fail with a 404, rather than resolving to
+  `gemini-embedding-001` as intended. Both fields now default to empty,
+  which changes nothing for Ollama itself, since `newEmbedClient` already
+  supplies `nomic-embed-text` there when the model is unset.
 
 - The configured databases are now listed in a deterministic order, sorted
   by name. `ClientManager` holds them in a map and both accessors iterated

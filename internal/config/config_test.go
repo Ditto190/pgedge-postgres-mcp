@@ -1910,3 +1910,233 @@ func TestPerAttemptTimeoutFromEnv(t *testing.T) {
 		t.Errorf("Knowledgebase.EmbeddingPerAttemptTimeout = %d, want 20", cfg.Knowledgebase.EmbeddingPerAttemptTimeout)
 	}
 }
+
+func TestGeminiEmbeddingFromEnv(t *testing.T) {
+	t.Setenv("PGEDGE_GEMINI_API_KEY", "server-gemini-key")
+	t.Setenv("PGEDGE_GEMINI_EMBEDDING_BASE_URL", "https://gemini.example.com")
+	t.Setenv("PGEDGE_KB_GEMINI_API_KEY", "kb-gemini-key")
+	t.Setenv("PGEDGE_KB_GEMINI_BASE_URL", "https://kb-gemini.example.com")
+
+	cfg := defaultConfig()
+	applyEnvironmentVariables(cfg)
+
+	if cfg.Embedding.GeminiAPIKey != "server-gemini-key" {
+		t.Errorf("Embedding.GeminiAPIKey = %q, want %q", cfg.Embedding.GeminiAPIKey, "server-gemini-key")
+	}
+	if cfg.Embedding.GeminiBaseURL != "https://gemini.example.com" {
+		t.Errorf("Embedding.GeminiBaseURL = %q, want %q", cfg.Embedding.GeminiBaseURL, "https://gemini.example.com")
+	}
+	if cfg.Knowledgebase.EmbeddingGeminiAPIKey != "kb-gemini-key" {
+		t.Errorf("Knowledgebase.EmbeddingGeminiAPIKey = %q, want %q", cfg.Knowledgebase.EmbeddingGeminiAPIKey, "kb-gemini-key")
+	}
+	if cfg.Knowledgebase.EmbeddingGeminiBaseURL != "https://kb-gemini.example.com" {
+		t.Errorf("Knowledgebase.EmbeddingGeminiBaseURL = %q, want %q", cfg.Knowledgebase.EmbeddingGeminiBaseURL, "https://kb-gemini.example.com")
+	}
+}
+
+func TestGeminiEmbeddingFromEnvFallback(t *testing.T) {
+	// The unprefixed GEMINI_API_KEY is the documented fallback, matching
+	// the handling of VOYAGE_API_KEY and OPENAI_API_KEY.
+	t.Setenv("PGEDGE_GEMINI_API_KEY", "")
+	t.Setenv("PGEDGE_KB_GEMINI_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "fallback-gemini-key")
+
+	cfg := defaultConfig()
+	applyEnvironmentVariables(cfg)
+
+	if cfg.Embedding.GeminiAPIKey != "fallback-gemini-key" {
+		t.Errorf("Embedding.GeminiAPIKey = %q, want %q", cfg.Embedding.GeminiAPIKey, "fallback-gemini-key")
+	}
+	if cfg.Knowledgebase.EmbeddingGeminiAPIKey != "fallback-gemini-key" {
+		t.Errorf("Knowledgebase.EmbeddingGeminiAPIKey = %q, want %q", cfg.Knowledgebase.EmbeddingGeminiAPIKey, "fallback-gemini-key")
+	}
+}
+
+func TestGeminiEmbeddingKeyFromFile(t *testing.T) {
+	// Neither environment variable is set, so the key file is consulted.
+	t.Setenv("PGEDGE_GEMINI_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("PGEDGE_KB_GEMINI_API_KEY", "")
+
+	tmpDir := t.TempDir()
+	embeddingKeyFile := filepath.Join(tmpDir, "gemini_embedding_key.txt")
+	if err := os.WriteFile(embeddingKeyFile, []byte("file-gemini-key\n"), 0600); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	kbKeyFile := filepath.Join(tmpDir, "gemini_kb_key.txt")
+	if err := os.WriteFile(kbKeyFile, []byte("file-kb-gemini-key\n"), 0600); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	cfg := defaultConfig()
+	cfg.Embedding.GeminiAPIKeyFile = embeddingKeyFile
+	cfg.Knowledgebase.EmbeddingGeminiAPIKeyFile = kbKeyFile
+	applyEnvironmentVariables(cfg)
+
+	if cfg.Embedding.GeminiAPIKey != "file-gemini-key" {
+		t.Errorf("Embedding.GeminiAPIKey = %q, want %q", cfg.Embedding.GeminiAPIKey, "file-gemini-key")
+	}
+	if cfg.Knowledgebase.EmbeddingGeminiAPIKey != "file-kb-gemini-key" {
+		t.Errorf("Knowledgebase.EmbeddingGeminiAPIKey = %q, want %q", cfg.Knowledgebase.EmbeddingGeminiAPIKey, "file-kb-gemini-key")
+	}
+}
+
+func TestGeminiEmbeddingEnvBeatsKeyFile(t *testing.T) {
+	t.Setenv("PGEDGE_GEMINI_API_KEY", "env-gemini-key")
+
+	tmpDir := t.TempDir()
+	keyFile := filepath.Join(tmpDir, "gemini_key.txt")
+	if err := os.WriteFile(keyFile, []byte("file-gemini-key\n"), 0600); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	cfg := defaultConfig()
+	cfg.Embedding.GeminiAPIKeyFile = keyFile
+	applyEnvironmentVariables(cfg)
+
+	if cfg.Embedding.GeminiAPIKey != "env-gemini-key" {
+		t.Errorf("Embedding.GeminiAPIKey = %q, want the environment value", cfg.Embedding.GeminiAPIKey)
+	}
+}
+
+func TestMergeGeminiEmbeddingConfig(t *testing.T) {
+	dest := defaultConfig()
+	src := &Config{
+		Embedding: EmbeddingConfig{
+			Provider:         "gemini",
+			Model:            "gemini-embedding-001",
+			GeminiAPIKey:     "merged-gemini-key",
+			GeminiAPIKeyFile: "/etc/pgedge/gemini.key",
+			GeminiBaseURL:    "https://gemini.example.com",
+		},
+		Knowledgebase: KnowledgebaseConfig{
+			Enabled:                   true,
+			DatabasePath:              "/var/lib/pgedge/kb.db",
+			EmbeddingProvider:         "gemini",
+			EmbeddingGeminiAPIKey:     "merged-kb-gemini-key",
+			EmbeddingGeminiAPIKeyFile: "/etc/pgedge/kb-gemini.key",
+			EmbeddingGeminiBaseURL:    "https://kb-gemini.example.com",
+		},
+	}
+
+	mergeConfig(dest, src)
+
+	if dest.Embedding.Provider != "gemini" {
+		t.Errorf("Embedding.Provider = %q, want %q", dest.Embedding.Provider, "gemini")
+	}
+	if dest.Embedding.GeminiAPIKey != "merged-gemini-key" {
+		t.Errorf("Embedding.GeminiAPIKey = %q, want %q", dest.Embedding.GeminiAPIKey, "merged-gemini-key")
+	}
+	if dest.Embedding.GeminiAPIKeyFile != "/etc/pgedge/gemini.key" {
+		t.Errorf("Embedding.GeminiAPIKeyFile = %q, want %q", dest.Embedding.GeminiAPIKeyFile, "/etc/pgedge/gemini.key")
+	}
+	if dest.Embedding.GeminiBaseURL != "https://gemini.example.com" {
+		t.Errorf("Embedding.GeminiBaseURL = %q, want %q", dest.Embedding.GeminiBaseURL, "https://gemini.example.com")
+	}
+	if dest.Knowledgebase.EmbeddingGeminiAPIKey != "merged-kb-gemini-key" {
+		t.Errorf("Knowledgebase.EmbeddingGeminiAPIKey = %q, want %q", dest.Knowledgebase.EmbeddingGeminiAPIKey, "merged-kb-gemini-key")
+	}
+	if dest.Knowledgebase.EmbeddingGeminiAPIKeyFile != "/etc/pgedge/kb-gemini.key" {
+		t.Errorf("Knowledgebase.EmbeddingGeminiAPIKeyFile = %q, want %q", dest.Knowledgebase.EmbeddingGeminiAPIKeyFile, "/etc/pgedge/kb-gemini.key")
+	}
+	if dest.Knowledgebase.EmbeddingGeminiBaseURL != "https://kb-gemini.example.com" {
+		t.Errorf("Knowledgebase.EmbeddingGeminiBaseURL = %q, want %q", dest.Knowledgebase.EmbeddingGeminiBaseURL, "https://kb-gemini.example.com")
+	}
+}
+
+// TestSwitchingEmbeddingProviderAloneLeavesModelEmpty guards against the
+// default Model value leaking across providers. defaultConfig used to
+// seed both Embedding.Model and Knowledgebase.EmbeddingModel with
+// Ollama's "nomic-embed-text", so a config that set only provider,
+// which every documented example pairs with model but nothing enforces,
+// kept that Ollama model name after merging. newEmbedClient only applies
+// its own per-provider default (e.g. gemini-embedding-001) when Model
+// is empty, so the stale value silently reached the provider: a live
+// Gemini request for model "nomic-embed-text" was confirmed to fail
+// with a 404 rather than the clear configuration error this is meant
+// to produce instead.
+func TestSwitchingEmbeddingProviderAloneLeavesModelEmpty(t *testing.T) {
+	dest := defaultConfig()
+	src := &Config{
+		Embedding: EmbeddingConfig{
+			Provider: "gemini",
+		},
+		Knowledgebase: KnowledgebaseConfig{
+			EmbeddingProvider: "gemini",
+		},
+	}
+
+	mergeConfig(dest, src)
+
+	if dest.Embedding.Model != "" {
+		t.Errorf("Embedding.Model = %q, want empty so newEmbedClient applies gemini's own default",
+			dest.Embedding.Model)
+	}
+	if dest.Knowledgebase.EmbeddingModel != "" {
+		t.Errorf("Knowledgebase.EmbeddingModel = %q, want empty so newEmbedClient applies gemini's own default",
+			dest.Knowledgebase.EmbeddingModel)
+	}
+}
+
+// TestDefaultOllamaModelStillAppliesWithNoConfig confirms the fix above
+// does not change behaviour for a config that sets nothing at all:
+// Provider stays "ollama" and Model stays empty, which is exactly the
+// input newEmbedClient's own ollama case already defaults to
+// "nomic-embed-text" for, so the zero-config path is unaffected.
+func TestDefaultOllamaModelStillAppliesWithNoConfig(t *testing.T) {
+	cfg := defaultConfig()
+
+	if cfg.Embedding.Provider != "ollama" {
+		t.Errorf("Embedding.Provider = %q, want ollama", cfg.Embedding.Provider)
+	}
+	if cfg.Embedding.Model != "" {
+		t.Errorf("Embedding.Model = %q, want empty (newEmbedClient supplies nomic-embed-text for ollama)",
+			cfg.Embedding.Model)
+	}
+	if cfg.Knowledgebase.EmbeddingProvider != "ollama" {
+		t.Errorf("Knowledgebase.EmbeddingProvider = %q, want ollama", cfg.Knowledgebase.EmbeddingProvider)
+	}
+	if cfg.Knowledgebase.EmbeddingModel != "" {
+		t.Errorf("Knowledgebase.EmbeddingModel = %q, want empty (newEmbedClient supplies nomic-embed-text for ollama)",
+			cfg.Knowledgebase.EmbeddingModel)
+	}
+}
+
+func TestLoadGeminiEmbeddingConfigFromYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	content := `
+embedding:
+  enabled: true
+  provider: gemini
+  gemini_api_key: yaml-gemini-key
+  gemini_base_url: https://gemini.example.com
+knowledgebase:
+  enabled: true
+  database_path: /var/lib/pgedge/kb.db
+  embedding_provider: gemini
+  embedding_gemini_api_key: yaml-kb-gemini-key
+  embedding_gemini_base_url: https://kb-gemini.example.com
+`
+	if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	cfg, err := loadConfigFile(configPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Embedding.GeminiAPIKey != "yaml-gemini-key" {
+		t.Errorf("Embedding.GeminiAPIKey = %q, want %q", cfg.Embedding.GeminiAPIKey, "yaml-gemini-key")
+	}
+	if cfg.Embedding.GeminiBaseURL != "https://gemini.example.com" {
+		t.Errorf("Embedding.GeminiBaseURL = %q, want %q", cfg.Embedding.GeminiBaseURL, "https://gemini.example.com")
+	}
+	if cfg.Knowledgebase.EmbeddingGeminiAPIKey != "yaml-kb-gemini-key" {
+		t.Errorf("Knowledgebase.EmbeddingGeminiAPIKey = %q, want %q", cfg.Knowledgebase.EmbeddingGeminiAPIKey, "yaml-kb-gemini-key")
+	}
+	if cfg.Knowledgebase.EmbeddingGeminiBaseURL != "https://kb-gemini.example.com" {
+		t.Errorf("Knowledgebase.EmbeddingGeminiBaseURL = %q, want %q", cfg.Knowledgebase.EmbeddingGeminiBaseURL, "https://kb-gemini.example.com")
+	}
+}
