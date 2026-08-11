@@ -376,15 +376,17 @@ llm:
     # Default: false (disabled for stdio mode)
     enabled: false
 
-    # LLM provider: "anthropic", "openai", or "ollama"
+    # LLM provider: "anthropic", "openai", "gemini", or "ollama"
     # Default: anthropic
     provider: "anthropic"
 
     # Model name (provider-specific)
     # Anthropic: claude-sonnet-4-5, claude-opus-4-5
     # OpenAI: gpt-5, gpt-4o, gpt-4-turbo
+    # Gemini: gemini-2.5-flash, gemini-2.5-pro
     # Ollama: llama3, llama3.1, mistral
-    # Default: claude-sonnet-4-5 (anthropic), gpt-5 (openai), llama3 (ollama)
+    # Default: claude-sonnet-4-5 (anthropic), gpt-5 (openai),
+    #          gemini-2.5-flash (gemini), llama3 (ollama)
     model: "claude-sonnet-4-5"
 
     # API key configuration (see notes below for priority)
@@ -403,6 +405,15 @@ llm:
     # Optional: Custom OpenAI API base URL (for proxies)
     # Leave empty to use default (https://api.openai.com)
     # openai_base_url: "https://your-proxy.example.com"
+
+    # For Gemini
+    gemini_api_key_file: "~/.gemini-api-key"
+    # gemini_api_key: ""  # Not recommended - use file or env var
+
+    # Optional: Custom Gemini API base URL (for proxies)
+    # Leave empty to use default
+    # (https://generativelanguage.googleapis.com)
+    # gemini_base_url: "https://your-proxy.example.com"
 
     # For Ollama
     ollama_url: "http://localhost:11434"
@@ -590,6 +601,8 @@ custom_definitions_path: ""
 #   LLM providers:
 #     - PGEDGE_ANTHROPIC_BASE_URL (default: https://api.anthropic.com)
 #     - PGEDGE_OPENAI_BASE_URL (default: https://api.openai.com)
+#     - PGEDGE_GEMINI_BASE_URL
+#       (default: https://generativelanguage.googleapis.com)
 #   Embedding providers:
 #     - PGEDGE_VOYAGE_BASE_URL (default: https://api.voyageai.com/v1/embeddings)
 #     - PGEDGE_OPENAI_EMBEDDING_BASE_URL (default: https://api.openai.com/v1)
