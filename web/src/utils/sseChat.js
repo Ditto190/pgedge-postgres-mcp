@@ -9,6 +9,27 @@
  */
 
 /**
+ * Normalises a tool call's arguments as they arrive on a
+ * `tool_use_start` event into the same partial-JSON string that
+ * `tool_use_delta` chunks accumulate, so both delivery styles converge
+ * on one representation before being parsed.
+ *
+ * A missing or null `input` yields the empty string, because the wire
+ * format sends `input: null` for the providers that stream arguments as
+ * deltas instead. Arguments already encoded as a JSON string are passed
+ * through untouched rather than re-encoded, which would otherwise parse
+ * back to a quoted string instead of an object.
+ *
+ * @param {*} input - The start event's `tool_use.input`, if any.
+ * @returns {string} Partial JSON to seed the accumulator with.
+ */
+function encodeStartArgs(input) {
+    if (input == null) return '';
+    if (typeof input === 'string') return input;
+    return JSON.stringify(input);
+}
+
+/**
  * Posts to the library proxy's streaming chat endpoint
  * (/api/llm/v1/chat/stream), parses Server-Sent Events, and assembles
  * the final response into the same shape returned by the non-streaming
@@ -28,9 +49,18 @@
  *   - "text"            -> appended to the current text block; also
  *                          surfaced via the onTextChunk callback so the
  *                          UI can update incrementally.
- *   - "tool_use_start"  -> begins a new tool_use block (id + name).
+ *   - "tool_use_start"  -> begins a new tool_use block (id, name, and
+ *                          an optional provider-specific signature that
+ *                          must be carried through unchanged; Gemini's
+ *                          thinking models require it back on this same
+ *                          call the next time it appears in history). May
+ *                          also carry the complete arguments directly, for
+ *                          providers (Gemini, Ollama) that never stream
+ *                          them incrementally.
  *   - "tool_use_delta"  -> accumulates partial JSON input string for
- *                          the current tool_use; parsed at done.
+ *                          the current tool_use; parsed at done. Providers
+ *                          that deliver complete arguments on the start
+ *                          event send no delta chunks at all.
  *
  * @param {object} body - Request body matching the /v1/chat schema
  *     (messages, tools, provider, model, etc.).
@@ -89,7 +119,7 @@ export async function sseChat(body, options = {}) {
     let pendingTextBlock = null;
     // Ordered list of tool_use ids so we preserve emission order at done.
     const toolOrder = [];
-    // Map of tool_use id -> { name, partial } accumulator.
+    // Map of tool_use id -> { name, partial, signature } accumulator.
     const pendingTools = new Map();
     let currentToolId = null;
     let streamError = null;
@@ -117,9 +147,18 @@ export async function sseChat(body, options = {}) {
                     input = { _raw: partial };
                 }
             }
+            const toolUse = { id, name: info.name, input };
+            // Gemini's thinking models attach an opaque signature to a
+            // function call and require it echoed back unchanged on
+            // that same call the next time it appears in conversation
+            // history, or the next turn is rejected outright; carry it
+            // through rather than reconstructing the block without it.
+            if (info.signature) {
+                toolUse.signature = info.signature;
+            }
             assembled.content.push({
                 type: 'tool_use',
-                tool_use: { id, name: info.name, input },
+                tool_use: toolUse,
             });
         }
     };
@@ -193,7 +232,20 @@ export async function sseChat(body, options = {}) {
                 }
                 pendingTools.set(id, {
                     name: tu.name || '',
-                    partial: '',
+                    // Some providers (Gemini, Ollama) deliver the
+                    // complete arguments on this event and send no delta
+                    // chunks at all; seed the buffer from them when
+                    // present rather than assuming a delta always
+                    // follows. The wire format sends `input: null` (no
+                    // omitempty on the Go side) for providers still to
+                    // come via deltas, so null must be treated the same
+                    // as absent rather than as a literal complete value.
+                    // A provider sending pre-encoded arguments as a JSON
+                    // string is taken as-is, since re-encoding it would
+                    // yield a quoted string rather than the object the
+                    // caller expects.
+                    partial: encodeStartArgs(tu.input),
+                    signature: tu.signature || '',
                 });
                 break;
             }
