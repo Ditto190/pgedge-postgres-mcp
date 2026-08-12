@@ -522,7 +522,13 @@ func (c *Client) initializeLLM() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	availableModels, err := tempClient.ListModels(ctx)
+	// Restrict the list to chat-capable models up front. The library
+	// backs this with real per-model data (e.g. Ollama's /api/show)
+	// rather than a name guess, and filtering here means every
+	// selection tier below — saved preference, family match, provider
+	// default, and the final fallback — only ever sees chat-capable
+	// models, not just the last of them.
+	availableModels, err := tempClient.ListModels(ctx, llmlib.WithCapabilities(llmlib.ModelCapabilityChat))
 	if err != nil {
 		if c.config.UI.Debug {
 			fmt.Fprintf(os.Stderr, "Warning: Failed to list models from %s: %s\n", provider, redact.Error(err))
@@ -530,8 +536,24 @@ func (c *Client) initializeLLM() error {
 		availableModels = nil
 	}
 
+	// If the provider answered but nothing on the list looks chat-capable
+	// (e.g. an Ollama instance with only an embedding model pulled),
+	// fetch the same list again without the filter. selectModel's final
+	// fallback uses this to name a model the provider actually offers
+	// rather than reaching for an unvalidated hardcoded default — the
+	// same guarantee it gave before the list was filtered by capability.
+	// Skipped when the first call already failed outright: a second,
+	// unfiltered request to an unreachable provider would only add
+	// latency to an already-failing path.
+	var rawModels []string
+	if err == nil && len(availableModels) == 0 {
+		if raw, rawErr := tempClient.ListModels(ctx); rawErr == nil {
+			rawModels = raw
+		}
+	}
+
 	// Select the best model to use
-	selection := c.selectModel(provider, availableModels)
+	selection := c.selectModel(provider, availableModels, rawModels)
 	c.config.LLM.Model = selection.model
 
 	if selection.usedFamilyMatch && c.config.UI.Debug {
@@ -1273,7 +1295,12 @@ type modelSelectionResult struct {
 // 3. Saved preference - family match (e.g., claude-opus-4-5-20251101 → claude-opus-4-5-20251217)
 // 4. Default for provider (if available)
 // 5. First available model from provider's list
-func (c *Client) selectModel(provider string, availableModels []string) modelSelectionResult {
+// rawModels is the same provider's model list without the chat-capability
+// filter, used only once every validated tier below has found nothing —
+// so the final fallback can still name a model the provider actually
+// offers instead of an unvalidated hardcoded default. Empty whenever
+// availableModels itself already held something.
+func (c *Client) selectModel(provider string, availableModels, rawModels []string) modelSelectionResult {
 	debug := c.config.UI.Debug
 
 	// If model was already set (via flag), use it (trust the user)
@@ -1343,13 +1370,49 @@ func (c *Client) selectModel(provider string, availableModels []string) modelSel
 		return modelSelectionResult{model: defaultModel, fromSavedPref: false, hadSavedPref: hadSaved}
 	}
 
-	// Fall back to first available model
+	// Fall back to the first available model that can hold a conversation.
+	// The provider's list is not confined to chat models, so taking the
+	// head of it unconditionally can land on something that rejects every
+	// message it is ever sent.
+	if candidate := firstChatCapableModel(availableModels); candidate != "" {
+		if debug {
+			fmt.Fprintf(os.Stderr, "[DEBUG] Falling back to first available chat model: %s (default %q also not available)\n",
+				candidate, defaultModel)
+		}
+		return modelSelectionResult{model: candidate, fromSavedPref: false, hadSavedPref: hadSaved}
+	}
+
+	// Nothing in the list looks usable for chat. Fall back to the head of it
+	// anyway rather than to a default the provider has not offered, so that
+	// whatever the provider says about it reaches the user.
 	if len(availableModels) > 0 {
 		if debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Falling back to first available model: %s (default %q also not available)\n",
-				availableModels[0], defaultModel)
+			fmt.Fprintf(os.Stderr, "[DEBUG] Falling back to first available model: %s (no model in the list looks usable for chat)\n",
+				availableModels[0])
 		}
 		return modelSelectionResult{model: availableModels[0], fromSavedPref: false, hadSavedPref: hadSaved}
+	}
+
+	// The capability filter left nothing at all (e.g. only an embedding
+	// model is installed) — but rawModels is unfiltered, so it can still
+	// hold a real conversational model the filter missed. Try the same
+	// name check as above before falling back to its head, for the same
+	// reason: the filter is real per-provider data, not a guess, but
+	// trusting it completely here would silently reintroduce issue #255
+	// if that data is ever wrong.
+	if candidate := firstChatCapableModel(rawModels); candidate != "" {
+		if debug {
+			fmt.Fprintf(os.Stderr, "[DEBUG] Falling back to first available chat-looking model (unfiltered): %s\n", candidate)
+		}
+		return modelSelectionResult{model: candidate, fromSavedPref: false, hadSavedPref: hadSaved}
+	}
+
+	if len(rawModels) > 0 {
+		if debug {
+			fmt.Fprintf(os.Stderr, "[DEBUG] Falling back to first available model (unfiltered): %s (no chat-capable model on the list)\n",
+				rawModels[0])
+		}
+		return modelSelectionResult{model: rawModels[0], fromSavedPref: false, hadSavedPref: hadSaved}
 	}
 
 	// Last resort: use default even if not validated
@@ -1422,6 +1485,63 @@ func extractModelFamily(model string) string {
 
 	// Return everything up to and including the hyphen before the date
 	return model[:len(model)-8]
+}
+
+// nonChatModelMarkers names the model kinds that cannot hold a text
+// conversation at all, as they appear in the model IDs the providers we
+// support advertise.
+//
+// A provider's model list is not confined to chat models, and none of the
+// four expose a capability flag that separates them: Ollama's /api/tags
+// reports embedding models next to conversational ones, and OpenAI and
+// Gemini list embedding, moderation, transcription, speech, image and video
+// models the same way. The names are the only signal available, so this
+// matches on the substrings those families put in their IDs:
+// nomic-embed-text, text-embedding-3-small, gemini-embedding-001,
+// omni-moderation-latest, whisper-1, gpt-4o-mini-tts, dall-e-3, imagen-4.0,
+// veo-3.0-generate-001 and their relatives.
+//
+// This is deliberately conservative, and covers only the kinds whose IDs say
+// what they are: a name that carries no marker is treated as a chat model,
+// because guessing the other way would rule out a usable model over a
+// coincidence in its name.
+var nonChatModelMarkers = []string{
+	"embed",
+	"rerank",
+	"moderation",
+	"whisper",
+	"transcribe",
+	"-tts",
+	"tts-",
+	"dall-e",
+	"imagen",
+	"stable-diffusion",
+	"veo-",
+	"lyria",
+}
+
+// isChatCapableModel reports whether a model ID looks like one that can be
+// used for chat, judged by the markers above. It says nothing about whether
+// the model exists or whether the caller is entitled to use it.
+func isChatCapableModel(model string) bool {
+	lower := strings.ToLower(model)
+	for _, marker := range nonChatModelMarkers {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	return true
+}
+
+// firstChatCapableModel returns the first model in availableModels that looks
+// usable for chat, or an empty string when the list holds none (or is empty).
+func firstChatCapableModel(availableModels []string) string {
+	for _, m := range availableModels {
+		if isChatCapableModel(m) {
+			return m
+		}
+	}
+	return ""
 }
 
 // isModelAvailable checks if model is in the available list
