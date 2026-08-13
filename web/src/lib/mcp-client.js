@@ -10,11 +10,78 @@
 
 // Web client version, injected from web/package.json by the define in
 // vite.config.js and vitest.config.js. It is deliberately not a literal
-// here: this constant is shown in the help panel and sent as
-// clientInfo.version in the MCP initialize handshake, and as a literal it
+// here: this constant is shown in the help panel, and as a literal it
 // sat at 1.0.0-alpha5 through five subsequent releases because nothing
 // tied it to anything that a release already had to touch.
 export const CLIENT_VERSION = __APP_VERSION__;
+
+// Protocol revision every request this client sends declares itself
+// as speaking. 2026-07-28 removed the connection-scoped initialize
+// handshake in favor of a stateless, per-request model (see
+// internal/mcp/modern.go on the server side) -- there is no older
+// revision to fall back to, since this client only ever talks to this
+// project's own server.
+export const MODERN_PROTOCOL_VERSION = '2026-07-28';
+
+// The Streamable HTTP transport spec requires an Mcp-Name header,
+// mirroring params.name or params.uri, on exactly these methods.
+const METHODS_REQUIRING_MCP_NAME = new Set(['tools/call', 'resources/read', 'prompts/get']);
+
+// modernMeta returns the _meta object every modern request must carry.
+// clientCapabilities is a plain object literal, not built through any
+// helper that might apply JSON.stringify-time omission of an empty
+// value -- the server only checks for the key's presence.
+function modernMeta() {
+    return {
+        'io.modelcontextprotocol/protocolVersion': MODERN_PROTOCOL_VERSION,
+        'io.modelcontextprotocol/clientCapabilities': {}
+    };
+}
+
+// nameOrURI extracts the value an Mcp-Name header must mirror from an
+// arbitrary request's params.
+function nameOrURI(params) {
+    if (!params) {
+        return '';
+    }
+    return params.name || params.uri || '';
+}
+
+// needsEscaping mirrors needsEscaping in internal/chat/mcp_client.go: it
+// reports whether value cannot round-trip safely as a raw HTTP header
+// value and must be base64-wrapped instead: any non-printable-ASCII
+// character, leading/trailing whitespace (stripped by HTTP header
+// parsing on both ends), or a value that already looks like the base64
+// sentinel (which decodeHeaderValue in internal/mcp/modern.go would
+// otherwise wrongly unwrap).
+function needsEscaping(value) {
+    if (!/^[\x20-\x7E]*$/.test(value)) {
+        return true;
+    }
+    if (value !== value.trim()) {
+        return true;
+    }
+    const prefix = '=?base64?';
+    const suffix = '?=';
+    if (value.length >= prefix.length + suffix.length &&
+        value.startsWith(prefix) && value.endsWith(suffix)) {
+        return true;
+    }
+    return false;
+}
+
+// encodeMcpNameHeader mirrors decodeHeaderValue in internal/mcp/modern.go:
+// a value that round-trips safely as a raw HTTP header value is sent
+// as-is; anything else is base64-encoded and wrapped in the spec's
+// sentinel.
+function encodeMcpNameHeader(value) {
+    if (!needsEscaping(value)) {
+        return value;
+    }
+    const bytes = new TextEncoder().encode(value);
+    const base64 = btoa(String.fromCharCode(...bytes));
+    return `=?base64?${base64}?=`;
+}
 
 /**
  * MCP Client for communicating with MCP server via JSON-RPC
@@ -42,16 +109,25 @@ export class MCPClient {
     async sendRequest(method, params = null) {
         this.requestID++;
 
+        const requestParams = { ...(params || {}), _meta: modernMeta() };
+
         const request = {
             jsonrpc: '2.0',
             id: this.requestID,
             method: method,
-            params: params || {}
+            params: requestParams
         };
 
         const headers = {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/event-stream',
+            'MCP-Protocol-Version': MODERN_PROTOCOL_VERSION,
+            'Mcp-Method': method
         };
+
+        if (METHODS_REQUIRING_MCP_NAME.has(method)) {
+            headers['Mcp-Name'] = encodeMcpNameHeader(nameOrURI(params));
+        }
 
         // Add Authorization header if token is present
         if (this.token) {
@@ -99,22 +175,20 @@ export class MCPClient {
     }
 
     /**
-     * Initialize MCP connection
-     * @returns {Promise<object>} - Initialize result
+     * Discover the server's identity and capabilities under the modern
+     * (2026-07-28) protocol. Replaces the legacy initialize handshake --
+     * 2026-07-28 removed the connection-scoped handshake in favor of a
+     * stateless, per-request model, and server/discover is how a client
+     * learns server identity/capabilities without one.
+     * @returns {Promise<object>} - Discover result
      */
     async initialize() {
-        const result = await this.sendRequest('initialize', {
-            protocolVersion: '2024-11-05',
-            capabilities: {},
-            clientInfo: {
-                name: 'pgedge-nla-web',
-                version: CLIENT_VERSION
-            }
-        });
+        const result = await this.sendRequest('server/discover');
 
-        // Store server info from response
-        if (result && result.serverInfo) {
-            this.serverInfo = result.serverInfo;
+        const serverInfo = result && result._meta &&
+            result._meta['io.modelcontextprotocol/serverInfo'];
+        if (serverInfo) {
+            this.serverInfo = serverInfo;
         }
 
         return result;
@@ -126,15 +200,6 @@ export class MCPClient {
      */
     getServerInfo() {
         return this.serverInfo;
-    }
-
-    /**
-     * Send initialized notification
-     * Note: This is a notification, not a request, so it doesn't expect a response
-     */
-    async sendInitializedNotification() {
-        // For HTTP mode, we still send this as a request (the server handles it)
-        await this.sendRequest('notifications/initialized', {});
     }
 
     /**
