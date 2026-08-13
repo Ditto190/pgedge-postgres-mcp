@@ -13,6 +13,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -21,6 +22,7 @@ import (
 	"pgedge-postgres-mcp/internal/database"
 	"pgedge-postgres-mcp/internal/logging"
 	"pgedge-postgres-mcp/internal/mcp"
+	"pgedge-postgres-mcp/internal/sqltext"
 )
 
 // stripTrailingSemicolons removes trailing semicolons and whitespace from
@@ -29,6 +31,55 @@ func stripTrailingSemicolons(query string) string {
 	return strings.TrimRightFunc(query, func(r rune) bool {
 		return r == ';' || unicode.IsSpace(r)
 	})
+}
+
+// limitKeywordPattern and offsetKeywordPattern match a LIMIT/OFFSET clause
+// keyword bounded by characters that can't appear in a PostgreSQL unquoted
+// identifier, so that "credit_limit" or "foo$limit" (the dollar sign is a
+// legal identifier character after the first position) doesn't count as a
+// clause. Go's regexp package has no lookaround, so the boundary characters
+// are captured alongside the keyword and excluded via the submatch index.
+var limitKeywordPattern = regexp.MustCompile(`(?i)(?:^|[^A-Z0-9_$])(LIMIT)(?:[^A-Z0-9_$]|$)`)
+var offsetKeywordPattern = regexp.MustCompile(`(?i)(?:^|[^A-Z0-9_$])(OFFSET)(?:[^A-Z0-9_$]|$)`)
+
+// queryHasClause reports whether a SQL statement already contains a
+// top-level LIMIT or OFFSET clause. It checks the statement's residue, with
+// comments removed and string literals, dollar-quoted blocks and quoted
+// identifiers replaced by placeholders, so a caller can't defeat the safety
+// cap by mentioning "limit" or "offset" in a string literal, a quoted
+// column alias, or a comment (issue #260).
+//
+// A match only counts at parenthesis depth zero, so a LIMIT/OFFSET that
+// belongs to a subquery or CTE, such as
+// "SELECT * FROM t WHERE id IN (SELECT id FROM u LIMIT 1)", isn't mistaken
+// for a clause on the outer statement.
+func queryHasClause(pattern *regexp.Regexp, sqlQuery string) bool {
+	residue, _ := sqltext.Strip(sqlQuery)
+	for _, loc := range pattern.FindAllStringSubmatchIndex(residue, -1) {
+		// loc[2] and loc[3] bound the captured keyword itself, excluding
+		// the boundary characters matched alongside it.
+		if parenDepthAt(residue, loc[2]) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// parenDepthAt returns the parenthesis nesting depth at byte offset pos in
+// s, counting unmatched '(' seen before it.
+func parenDepthAt(s string, pos int) int {
+	depth := 0
+	for i := 0; i < pos; i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return depth
 }
 
 // QueryDatabaseTool creates the query_database tool
@@ -234,10 +285,13 @@ To avoid rate limits (30,000 input tokens/minute):
 				return mcp.NewToolError("Query is empty")
 			}
 
-			// Track if query already had LIMIT/OFFSET clauses
+			// Track if query already had LIMIT/OFFSET clauses. Checked
+			// against the statement's residue rather than raw text, so a
+			// literal or identifier that merely mentions "limit"/"offset"
+			// doesn't defeat the safety cap (issue #260).
 			upperQuery := strings.ToUpper(strings.TrimSpace(sqlQuery))
-			hasExistingLimit := strings.Contains(upperQuery, "LIMIT")
-			hasExistingOffset := strings.Contains(upperQuery, "OFFSET")
+			hasExistingLimit := queryHasClause(limitKeywordPattern, sqlQuery)
+			hasExistingOffset := queryHasClause(offsetKeywordPattern, sqlQuery)
 
 			// Check if this is a SELECT query - only SELECT queries support LIMIT/OFFSET
 			// DDL (CREATE, ALTER, DROP) and DML (INSERT, UPDATE, DELETE) don't support LIMIT
