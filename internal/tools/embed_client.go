@@ -43,9 +43,11 @@ type embedClientConfig struct {
 // wrapper applied (voyage-3-lite model default, nomic-embed-text for
 // ollama, localhost:11434 for the ollama URL), along with a
 // gemini-embedding-001 default for gemini, whose request URL embeds the
-// model name and so cannot be left empty. It returns the client
-// and the resolved model name (after defaults are applied) so callers
-// can display it without re-deriving the default logic.
+// model name and so cannot be left empty, and a text-embedding-3-small
+// default for openai, whose embeddings API requires a non-empty model
+// field in the JSON request body. It returns the client and the
+// resolved model name (after defaults are applied) so callers can
+// display it without re-deriving the default logic.
 func newEmbedClient(cfg embedClientConfig) (llm.Client, string, error) {
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	var opts llm.Options
@@ -67,9 +69,13 @@ func newEmbedClient(cfg embedClientConfig) (llm.Client, string, error) {
 		if cfg.OpenAIAPIKey == "" {
 			return nil, "", fmt.Errorf("missing OpenAI API key for embedding provider 'openai'")
 		}
+		model := cfg.Model
+		if model == "" {
+			model = "text-embedding-3-small"
+		}
 		opts = llm.Options{
 			APIKey:  cfg.OpenAIAPIKey,
-			Model:   cfg.Model,
+			Model:   model,
 			BaseURL: cfg.OpenAIBaseURL,
 		}
 	case "gemini":
