@@ -1,5 +1,45 @@
 {
   "components": {
+    "parameters": {
+      "AcceptHeader": {
+        "description": "The Streamable HTTP transport requires a modern (2026-07-28) client to list both application/json and text/event-stream here, because a conforming server may answer any request with either a single JSON object or a request-scoped SSE stream. This server always answers with application/json -- it implements no streaming method -- and does not inspect this header, so a request that omits it is not rejected; it is documented because a client that talks to other MCP servers must send it to remain conforming.",
+        "in": "header",
+        "name": "Accept",
+        "required": false,
+        "schema": {
+          "example": "application/json, text/event-stream",
+          "type": "string"
+        }
+      },
+      "MCPProtocolVersionHeader": {
+        "description": "Required on a modern (2026-07-28) request; omit entirely for a legacy request. Must equal the request body's _meta.io.modelcontextprotocol/protocolVersion field, or the request is rejected with 400 and a HeaderMismatch (-32020) JSON-RPC error.",
+        "in": "header",
+        "name": "MCP-Protocol-Version",
+        "required": false,
+        "schema": {
+          "example": "2026-07-28",
+          "type": "string"
+        }
+      },
+      "McpMethodHeader": {
+        "description": "Required alongside MCP-Protocol-Version on a modern request. Must equal the JSON-RPC request body's method field, or the request is rejected with 400 and a HeaderMismatch (-32020) JSON-RPC error.",
+        "in": "header",
+        "name": "Mcp-Method",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "McpNameHeader": {
+        "description": "Required on a modern tools/call, resources/read, or prompts/get request; not sent for any other method. Must equal the body's params.name (tools/call, prompts/get) or params.uri (resources/read), Base64-sentinel-encoded (\"=?base64?\u003cvalue\u003e?=\") if the raw value is not safely representable as a plain ASCII header.",
+        "in": "header",
+        "name": "Mcp-Name",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
     "schemas": {
       "ChatMessage": {
         "description": "A single chat message with a role and content.",
@@ -390,7 +430,7 @@
           },
           "version": {
             "description": "The server version.",
-            "example": "1.0.0",
+            "example": "1.1.0-beta1",
             "type": "string"
           }
         },
@@ -418,12 +458,16 @@
             "description": "The MCP method to invoke.",
             "enum": [
               "initialize",
+              "server/discover",
+              "ping",
               "tools/list",
               "tools/call",
               "resources/list",
               "resources/read",
               "prompts/list",
-              "prompts/get"
+              "prompts/get",
+              "pgedge/listDatabases",
+              "pgedge/selectDatabase"
             ],
             "type": "string"
           },
@@ -870,7 +914,7 @@
       "name": "PostgreSQL License"
     },
     "title": "pgEdge Postgres MCP Server API",
-    "version": "1.0.0"
+    "version": "1.1.0-beta1"
   },
   "openapi": "3.0.3",
   "paths": {
@@ -1789,8 +1833,22 @@
     },
     "/mcp/v1": {
       "post": {
-        "description": "Accepts a JSON-RPC 2.0 request implementing the Model Context Protocol. Supported methods include initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, and prompts/get. Bearer token authentication is required when auth is enabled.",
+        "description": "Accepts a JSON-RPC 2.0 request implementing the Model Context Protocol. Supported methods are initialize, server/discover, ping, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, pgedge/listDatabases, and pgedge/selectDatabase. Bearer token authentication is required when auth is enabled. Two protocol revisions are served on this same endpoint: a request whose body carries _meta.io.modelcontextprotocol/protocolVersion (or, on HTTP, a present MCP-Protocol-Version header) is served under the current, stateless revision (2026-07-28), which requires the MCP-Protocol-Version, Mcp-Method, and (for tools/call, resources/read, prompts/get) Mcp-Name headers described below, and which also expects a conforming client to offer both application/json and text/event-stream in Accept; any other request is served under the original, handshake-based revision (2024-11-05), which sends none of those headers and negotiates via initialize instead. initialize itself exists only under that original revision: it is not a method the current revision recognizes.",
         "operationId": "postMCP",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/MCPProtocolVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/McpMethodHeader"
+          },
+          {
+            "$ref": "#/components/parameters/McpNameHeader"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptHeader"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1811,7 +1869,17 @@
                 }
               }
             },
-            "description": "JSON-RPC 2.0 response."
+            "description": "JSON-RPC 2.0 response. This includes a JSON-RPC-level error (for example, a tool's own argument validation failure) that is not one of the two rejections documented below."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JSONRPCResponse"
+                }
+              }
+            },
+            "description": "The request identified itself as the current (2026-07-28) revision -- via body _meta or the MCP-Protocol-Version header -- and failed validation before dispatch: a required header is missing or does not match the request body (HeaderMismatch, -32020), a required _meta field is missing (-32602), or the requested protocol version is not supported (UnsupportedProtocolVersion, -32022)."
           },
           "401": {
             "content": {
@@ -1832,6 +1900,16 @@
               }
             },
             "description": "Insufficient permissions."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JSONRPCResponse"
+                }
+              }
+            },
+            "description": "The request identified itself as the current (2026-07-28) revision and named a method that revision does not recognize (-32601, Method not found). This includes initialize, which exists only under the original (2024-11-05) revision."
           }
         },
         "security": [

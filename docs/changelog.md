@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-17
+
 ### Added
 
 - Tracing gains a metadata-only mode for operators who want per-token
@@ -68,6 +70,122 @@ and this project adheres to
   that cannot be read, or that holds nothing, is an error rather than a
   silent fallback.
 
+- The server now implements the current MCP specification revision,
+  `2026-07-28`, alongside its original revision, `2024-11-05`, on both
+  transports at once (dual-era, per the versioning spec's own
+  guidance). A request whose `params._meta` carries
+  `io.modelcontextprotocol/protocolVersion` is served under the new,
+  stateless model: `server/discover` (required by the spec for every
+  server), per-request `_meta` negotiation in place of the removed
+  `initialize` handshake, `resultType`/`ttlMs`/`cacheScope` on results,
+  and the Streamable HTTP transport's required
+  `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Name` headers. A request
+  without that `_meta` field, including every `initialize` handshake
+  -- which covers the bundled CLI and web client, and every existing
+  integration test -- is served exactly as before this change, with no
+  observable difference. Conversely, an `initialize` request that does
+  carry that `_meta` field is rejected with `-32601 Method not found`
+  on both transports, matching the modern era's method set, which has
+  no handshake to answer -- and, on HTTP, this and every other
+  `-32601` for a modern request now pairs with HTTP `404`, per the
+  transport spec's own reasoning: it is what lets a client tell this
+  server apart from a legacy HTTP+SSE server that doesn't host the
+  endpoint at all. A present `MCP-Protocol-Version` header now also
+  marks an HTTP request modern even when its body doesn't, since no
+  client older than `2025-06-18` ever sends that header; a modern
+  `ping` over stdio now carries `resultType` like every other modern
+  result, matching what it already carried over HTTP. See [MCP
+  Specification
+  Compliance](developers/mcp-spec-compliance.md) for the full
+  negotiation rules and, importantly, what was deliberately not
+  adopted from this revision and why (`subscriptions/listen`, Multi
+  Round-Trip Requests/Roots/Sampling/Elicitation, `x-mcp-header`,
+  OAuth-related changes, and icons): none of them have anything for
+  this server to attach to today.
+
+- A `make vulncheck` target runs `govulncheck` over the module, using
+  call-graph analysis to prioritize known vulnerabilities that this code can
+  actually reach over every advisory affecting a dependency. See
+  [Development](contributing/development.md) for details.
+
+- Database configuration now accepts `sslcert`, `sslkey`, and
+  `sslrootcert` fields, letting the server authenticate to PostgreSQL
+  with a client certificate instead of, or alongside, a password.
+  Configure them with `databases[].sslcert`, `databases[].sslkey`,
+  and `databases[].sslrootcert` in the configuration file, the
+  `-db-sslcert`, `-db-sslkey`, and `-db-sslrootcert` CLI flags, or the
+  `PGEDGE_DB_SSLCERT`/`PGSSLCERT`, `PGEDGE_DB_SSLKEY`/`PGSSLKEY`, and
+  `PGEDGE_DB_SSLROOTCERT`/`PGSSLROOTCERT` environment variables.
+  `sslcert` and `sslkey` must be set together. `sslrootcert` takes
+  effect only under `sslmode` `require`, `verify-ca`, or `verify-full`;
+  under `disable`, `allow`, or `prefer` (the default) pgx never checks
+  the server certificate against it and silently ignores the value,
+  matching libpq and `psql`. In HTTP mode, changing any of these fields and
+  reloading the configuration (`SIGHUP`) now closes pooled per-token
+  connections so they reconnect with the new certificate settings.
+
+- A configurable per-attempt timeout bounds each individual HTTP attempt
+  to an LLM or embedding provider, so a single slow attempt becomes
+  retryable instead of consuming the whole request budget; the
+  knowledgebase embedding path honours the same setting. Configure it
+  with `per_attempt_timeout` in the `llm` and `embedding` config
+  sections, `embedding_per_attempt_timeout` in the `knowledgebase`
+  section, or the `PGEDGE_LLM_PER_ATTEMPT_TIMEOUT`,
+  `PGEDGE_EMBEDDING_PER_ATTEMPT_TIMEOUT`, and
+  `PGEDGE_KB_EMBEDDING_PER_ATTEMPT_TIMEOUT` environment variables
+  (default 60 seconds; set the corresponding environment variable to 0
+  to disable the cap).
+
+- Similarity search now validates the query embedding dimension against
+  the target vector column before querying, returning a clear error on a
+  mismatch instead of a raw database error.
+
+- Similarity search now supports pgvector `halfvec` columns; it detects
+  the column type and casts the query vector accordingly (requires
+  pgvector 0.7.0 or later).
+
+- The web client now uses the provider display name reported by the
+  proxy, falling back to its built-in labels when none is supplied.
+
+- Each built-in tool, resource, and prompt can now be enabled or
+  disabled via an environment variable in addition to the
+  `builtins` section of the configuration file. The variables are
+  `PGEDGE_BUILTIN_TOOL_*`, `PGEDGE_BUILTIN_RESOURCE_*`, and
+  `PGEDGE_BUILTIN_PROMPT_*`; see the configuration reference for
+  the complete list. This is useful in containerized deployments
+  where editing the configuration file is awkward. (#139)
+
+- The installer detects running Postgres instances and offers
+  to connect to them, with automatic database listing.
+
+- Added `--detect` / `-Detect` flag for non-interactive
+  auto-connection to detected Postgres instances.
+
+- The installer detects previous installations and offers
+  to update the binary or reconfigure the database connection
+  instead of re-running the full install flow.
+
+- Schema metadata cache now refreshes automatically based on a
+  configurable TTL. The `metadata_ttl` database option controls
+  how long cached metadata remains valid (default: 5 minutes).
+  This fixes an issue where `get_schema_info` returned stale
+  results when tables were created outside the MCP server or
+  when using read-only database connections.
+
+- HTTP authentication is now configurable in Docker deployments
+  via the `PGEDGE_AUTH_ENABLED` environment variable. Auth remains
+  enabled by default; set `PGEDGE_AUTH_ENABLED=false` only in
+  trusted local development environments (for example, when
+  connecting Claude through `mcp-remote` with a fixed bearer
+  token and needing access to multiple databases). The setting is
+  honored by both the single-database and multi-database
+  initialization paths. (#167)
+
+- Google Gemini is now a supported LLM provider. Configure via
+  `gemini_api_key` / `gemini_api_key_file` in the config file or
+  via the `PGEDGE_GEMINI_API_KEY` / `GEMINI_API_KEY` environment
+  variables.
+
 ### Changed
 
 - The LLM library moves to `pgedge-go-llm-lib` v0.3.0, which adds the
@@ -89,8 +207,6 @@ and this project adheres to
   per-request `_meta` envelope on every subsequent request. There is no
   legacy fallback, so a CLI or web client from this release requires a
   server from this release or later.
-
-### Changed
 
 - Dependencies across every ecosystem this project uses are now on their
   latest releases. The GitHub Actions pins move to the current major of
@@ -132,6 +248,140 @@ and this project adheres to
   that still set them keep loading, the values simply having no effect.
   Callers of the LLM proxy API may still pass a per-request `temperature`,
   which is forwarded only when present.
+
+- The LLM provider clients (Anthropic, OpenAI, and Ollama) now use the
+  shared
+  [`pgedge-go-llm-lib`](https://github.com/pgEdge/pgedge-go-llm-lib)
+  library instead of hand-rolled HTTP wire code; approximately 1500
+  lines of provider-specific code are removed from `internal/chat/`.
+  Behaviour is preserved; the `LLMClient` interface is unchanged.
+
+- Anthropic prompt caching now covers both the tools block and the
+  system prompt (the library exposes a `WithSystemCaching` builder
+  alongside `WithToolCaching`). Long system prompts no longer pay
+  full input-token cost on every turn.
+
+- OpenAI models that require the Responses API (`gpt-5-*`, `o1-*`,
+  `o3-*`) are now supported transparently; the library routes them
+  to `/v1/responses` automatically based on the model name.
+
+- Embedding provider clients (Voyage, OpenAI, Ollama) now use the
+  shared
+  [`pgedge-go-llm-lib`](https://github.com/pgEdge/pgedge-go-llm-lib)
+  library instead of hand-rolled HTTP wire code. Approximately 1100
+  lines of provider-specific code are removed from
+  `internal/embedding/`. The `Provider` interface and `NewProvider`
+  factory are preserved; tool consumers (search_knowledgebase,
+  generate_embedding, similarity_search) compile unchanged.
+
+- `Provider.Dimensions()` is now lazily populated from the first
+  successful `Embed` call; it returns 0 before any embedding has been
+  generated (previously the value was hard-coded per known model).
+
+- Refactored `Client.LoadMetadataFor` in
+  `internal/database/connection.go`. The CTE-based metadata query
+  now lives in `internal/database/load_metadata.sql` and is loaded
+  via `//go:embed`; the per-row scan and the grouping/transform
+  logic are split into `scanMetadataRow` and `buildTableInfo` in
+  `internal/database/metadata.go`. `buildTableInfo` is pure and is
+  covered by table-driven unit tests that do not require a live
+  database. No behavior change. (#153)
+
+- The built-in `pg://system_info` resource now uses the machine-safe
+  name `postgresql_system_info` (previously
+  `"PostgreSQL System Information"`). The new name matches the
+  identifier pattern enforced by Anthropic's tool-name validation
+  (`^[a-zA-Z0-9_-]{1,128}$`), so the resource no longer breaks
+  interoperability when a downstream MCP client forwards built-in
+  capability names as provider tool names. The resource URI is
+  unchanged. (#139)
+
+- The KB Builder (formerly `cmd/kb-builder` and the
+  `internal/kb*` packages) has moved to a standalone project at
+  [`pgedge-ai-kb`](https://github.com/pgEdge/pgedge-ai-kb). The
+  binary is renamed from `pgedge-nla-kb-builder` to
+  `pgedge-ai-kb-builder`. The MCP server itself is unaffected; it
+  continues to consume a pre-built `kb.db` at runtime. The Docker
+  build now downloads `kb.db` from
+  `https://github.com/pgEdge/pgedge-ai-kb/releases/download/kb-latest/kb.db`
+  by default; pass `KB_SOURCE` to override. The
+  `pgedge-nla-kb-builder_*` release archives are no longer published
+  from this repository.
+
+- The LLM HTTP proxy is now provided by `pgedge-go-llm-lib`'s
+  `llm/proxy` package, mounted at `/api/llm/`. The endpoints moved
+  from `/api/llm/{providers,models,chat}` to `/api/llm/v1/*`, and
+  the request/response wire format now uses typed content blocks
+  (see the library's `llm.ChatRequest` and `llm.ContentBlock`).
+  `internal/llmproxy/` is deleted; tracing plumbs through proxy
+  hooks via the new `internal/llmtracing` package.
+
+- A streaming chat endpoint `/api/llm/v1/chat/stream` (SSE) is now
+  exposed alongside the non-streaming endpoint. The non-streaming
+  `/v1/chat` endpoint remains available for callers that prefer it.
+
+- The web chat interface now consumes the streaming endpoint
+  `/api/llm/v1/chat/stream` (Server-Sent Events) and renders the
+  assistant response incrementally as chunks arrive. The
+  non-streaming endpoint stays available for callers that prefer
+  it. A new `web/src/utils/sseChat.js` helper handles the SSE
+  parsing and assembles the final response into the same shape
+  the non-streaming endpoint returns, so the agentic chat loop is
+  unchanged.
+
+- The tools `search_knowledgebase`, `generate_embedding`, and
+  `similarity_search` now construct their embedding client
+  directly via `llm.NewClient` rather than going through the old
+  `embedding.NewProvider` wrapper. The `internal/embedding/`
+  package is deleted entirely.
+
+- The temporary `chat.LLMClient` interface and `libClient` adapter
+  added in the first migration PR are removed. The CLI chat client
+  now consumes `pgedge-go-llm-lib`'s `llm.Client` API directly.
+  `internal/chat/llm.go` and `internal/chat/llm_translate.go` are
+  deleted; messages and content blocks flow through the chat
+  package as `llm.Message` and `llm.ContentBlock` rather than
+  chat-package wrapper types. The library's `llm.Client` API
+  itself is unchanged. The CLI's debug-mode HTTP tracing still
+  injects via `llm.Options.HTTPClient`.
+
+- Saved conversations from earlier versions are migrated on load:
+  messages with a plain-string `content` field are wrapped as a
+  single text content block, and tool-result messages saved with
+  role `"user"` are promoted to role `"tool"` to match the
+  library's expected shape. The on-disk JSON written by this and
+  later versions uses the typed content-block format directly.
+
+- The web client now groups the conversation-level Save and Delete
+  actions in a new menu in the status banner header, alongside the
+  database switcher and connection details, rather than placing them
+  next to the message input. This keeps the destructive Delete action
+  away from the Send button and clarifies that the actions affect the
+  whole conversation. Deleting a conversation now requires confirmation
+  via a dialog instead of a browser prompt. (#73)
+
+- Custom `pl-func` tools now fail immediately, with an explanation, on
+  a database connection that does not permit writes. Such a tool
+  creates and drops a temporary function, which a read-only
+  transaction cannot do, so it previously failed partway through with
+  an opaque permissions error that invited disabling read-only mode as
+  the remedy. Use a `pl-do` tool on a read-only connection.
+
+- The read-only statement guard no longer rejects a query merely for
+  mentioning `transaction_read_only` or `default_transaction_read_only`
+  inside a string literal or a comment, so an ordinary lookup such as
+  `SELECT * FROM config WHERE key = 'transaction_read_only'` is now
+  permitted. A rejection additionally requires a construct capable of
+  changing a setting.
+
+- Dependencies are refreshed for this release. The LLM library moves to
+  `pgedge-go-llm-lib` v0.3.1, picking up its own upstream fixes without
+  any change to the API this project calls. On the web client side,
+  `@testing-library/jest-dom`, `@testing-library/user-event`,
+  `happy-dom`, `puppeteer`, and `vite` take routine patch and minor
+  updates, which together clear one high-severity `npm audit` finding;
+  the first four are development dependencies, so only the Vite update
+  affects what is built and shipped, and no behaviour changes with it.
 
 ### Fixed
 
@@ -298,6 +548,256 @@ and this project adheres to
   recorded. It is now injected from `web/package.json`, the manifest a
   release already has to bump, so the two cannot drift apart; a test
   asserts the two agree.
+
+- `resources/read` on an unknown URI now returns a real JSON-RPC error
+  instead of a disguised success. Both resource registries
+  (`internal/resources/registry.go` and the `ContextAwareRegistry`
+  actually wired into the server) returned a "successful" result whose
+  content was a `"Resource not found: ..."` text block, on every
+  revision this server has ever shipped; per the MCP spec, an unknown
+  resource URI is a protocol-level error (`-32002` for a legacy
+  request, `-32602` for a modern one -- see the `Added` entry above).
+  `ContextAwareRegistry.Read` also now checks whether a URI is even a
+  recognised resource *before* acquiring a database client, rather
+  than after: previously, reading an unknown URI without a working
+  database connection returned a database-error message instead of a
+  not-found one, since acquiring a client came first regardless of
+  whether the resource existed at all.
+
+- The conversation actions menu in the status banner header no longer
+  offers a "Delete conversation" item that does not delete anything. That
+  action resets the chat window and starts a new conversation; it never
+  removed the conversation from the conversation list, so a selected
+  conversation appeared to survive the delete. The item is now labelled
+  "Clear conversation", and its confirmation dialog explains that the
+  conversation stays in the list, where the per-conversation delete button
+  removes it for good. (#223)
+
+- Tool calls made over the streaming chat endpoint are no longer silently
+  dropped, which showed up in the web client as "No response received"
+  whenever a provider decided to call a tool. The terminating `done` frame
+  of that stream carries a chunk structure with no field for a stop
+  reason, so the client had nothing to read and fell back to assuming
+  `end_turn`; the agentic loop then looked only for text blocks and
+  ignored the `tool_use` block sitting alongside them. The OpenAI
+  provider hit this on every tool call, because it reports a distinct
+  `tool_calls` finish reason that had no way of reaching the client. The
+  client now infers `tool_use` when the assembled response contains a
+  `tool_use` block and the server reported `end_turn` or nothing at all,
+  leaving a more specific reason such as `max_tokens` untouched.
+
+- Reading an MCP resource after an idle period no longer reports the
+  database as unavailable. Metadata expires once it is older than
+  `metadata_ttl` (five minutes by default), and `IsMetadataLoaded()`
+  returns false both for a connection that has never loaded any metadata
+  and for one whose metadata has simply aged out. The resource path
+  treated the second case as a database that was not ready, so it
+  returned a retryable `DATABASE_NOT_READY` without attempting a reload;
+  the web client's status banner then showed "Database is switching",
+  retried five times, and settled on "Database switch taking longer than
+  expected", all against a perfectly healthy database. The MCP tools
+  already reloaded in this situation, so only resources were affected.
+  Both resource paths now reload expired metadata through a new
+  `EnsureMetadata` helper, and report `DATABASE_NOT_READY` only when that
+  reload genuinely fails. Raising `metadata_ttl` is no longer needed as a
+  workaround. At most one reload per connection runs at a time, and
+  callers arriving whilst one is in flight wait for it and share its
+  outcome, so a burst arriving once the TTL has expired issues one catalog
+  query between them rather than one each; the status banner refreshing
+  several resources at once makes such bursts routine. Sharing the outcome
+  matters most when the database is unreachable, since a retry per caller
+  would queue one connect timeout each. Failures are not cached, so the
+  next caller to arrive starts a fresh attempt.
+
+- `make test` now runs every package that has tests. Ten packages were absent
+  from the server target and so were never exercised by the suite or by
+  continuous integration: `api`, `compactor`, `conversations`, `definitions`,
+  `httperror`, `llmtracing`, `logging`, `prompts`, `search` and `tsv`. All of
+  them pass; they were simply never run.
+
+- `tools/list`, `prompts/list`, and `resources/list` now return their
+  entries in a stable, sorted order on every call. Each registry stored
+  its entries in a Go map and built the response by iterating it
+  directly, so the order was randomised by the runtime and changed from
+  one call to the next even when the underlying set was unchanged. Tool,
+  prompt, and resource definitions sit at the front of the prompt sent to
+  the model, so the reshuffling invalidated the provider-side prompt
+  cache on every request rather than only when the set actually changed,
+  and it defeated client-side diffing of the advertised list for the
+  same reason. `Registry.List()` in each of `internal/tools`,
+  `internal/prompts`, and `internal/resources` now sorts by name (tools,
+  prompts) or URI (resources) before returning; `ContextAwareRegistry.List()`
+  in `internal/resources`, which merges a fixed built-in entry with a map
+  of custom resources, sorts its combined result the same way. Every
+  registration is keyed by its own name or URI in this codebase today,
+  so the sort has no ties to break in practice, but the comparison also
+  falls back to the registration key, which is unique by construction:
+  `sort.Slice` gives no ordering guarantee between two entries that
+  compare equal, so a future entry whose Definition happened to
+  advertise the same name or URI as another under a different key would
+  otherwise be exactly as nondeterministic as before this fix. Fixes
+  #211.
+
+- `initialize` no longer echoes back whatever `protocolVersion` a client
+  requests. Version negotiation is the server's half of the MCP
+  handshake: the client proposes a revision, and the server is supposed
+  to reply with the revision it will actually speak, which the client
+  then checks against what it supports. Echoing the request answers
+  with no information at all, so a client asking for a revision this
+  server does not implement was told that revision was accepted, and
+  found out otherwise later, against a missing capability, rather than
+  at the version check meant to catch exactly this case. `initialize`
+  (stdio) and `initialize` over HTTP now both call a shared
+  `NegotiateProtocolVersion`, which returns the newest revision this
+  server supports at or below the client's request, or the oldest
+  supported revision if the request predates everything the server
+  implements. This server currently implements one revision,
+  `2024-11-05`, so today every negotiation converges on that value
+  regardless of what a client asked for; the function is structured to
+  extend cleanly if a second revision is added later. The bundled CLI
+  and web client are unaffected, since both already request
+  `2024-11-05` exactly.
+
+  `initialize` over HTTP also now rejects malformed parameters with a
+  proper `-32602 Invalid params` error, matching every other HTTP handler
+  and the stdio transport's existing behaviour. The HTTP handler
+  previously never read the client's parameters at all, so it accepted
+  anything; it now parses them, and a field of the wrong JSON type, such
+  as a numeric `protocolVersion` or a `clientInfo` that is not an object,
+  fails the handshake instead of silently falling back to the server's
+  default. Omitting the parameters entirely still succeeds and yields
+  that default. Fixes #212.
+
+- Metadata loader no longer emits duplicate column entries for a
+  column that participates in more than one foreign-key constraint.
+  The `fk_columns` CTE produced one row per foreign key, so the
+  downstream LEFT JOIN multiplied the per-column rows; `get_schema_info`
+  consequently listed the affected column once per foreign key. The CTE
+  now aggregates every reference into one ordered, de-duplicated array
+  per column, and `ColumnInfo.ForeignKeyRefs` is a `[]string` so all
+  references are surfaced (comma-separated in the `fk_ref` output
+  column) rather than silently discarding all but one. (#171)
+
+- The edit and delete icons in the conversation history list no longer
+  overlap the conversation title; the list item now reserves enough
+  space for both controls so long titles ellipsize cleanly. (#73)
+
+- Every HTTP error response is now a consistent JSON object
+  (`{"error": "..."}`) with an appropriate status code, including
+  framework-level cases that previously bypassed the normal handlers
+  and returned a plaintext or empty body: an unknown route (404), a
+  method mismatch (405), an oversized request body (413, distinguished
+  from other body-read failures), and a panic inside a handler (500;
+  previously the connection was simply closed with no response at
+  all). A shared `internal/httperror` helper backs the new panic
+  recovery and 404 catch-all middleware, as well as the handlers that
+  previously wrote plaintext errors via `http.Error`
+  (`/mcp/v1`, `/api/chat/compact`, `/api/openapi.json`, and the
+  session-auth wrapper). Request bodies on `/api/chat/compact`,
+  `/api/databases/select`, and the `/api/conversations*` endpoints are
+  now also capped at 10MB, matching the existing `/mcp/v1` limit. The
+  HTTP server now sets `ReadHeaderTimeout`, `ReadTimeout`, and
+  `IdleTimeout` to guard against slow-header and slow-body attacks;
+  these fire before a request reaches a handler, so (unlike the cases
+  above) there is no response body to produce. Every 405 response now
+  also sets the `Allow` header naming the supported method(s), per
+  RFC 7231 §6.5.5. `GET /api/databases`'s 405 uses the shared
+  `internal/httperror` writer; `POST /api/databases/select`'s 405 uses
+  the endpoint's own documented `{"success": false, "error": "..."}`
+  shape instead, matching its other error responses (400, 404, 403)
+  rather than the bare `{"error": "..."}` it previously returned only
+  for that one status code. (#189)
+
+- Tool and resource responses now show the operator-configured database
+  display name instead of the raw connection details. Previously,
+  `query_database`, `get_schema_info`, `execute_explain`, `count_rows`,
+  and `similarity_search` only masked the password in the connection
+  string they showed the caller, leaving the real host, port, and
+  database name visible; `pg://system_info` was worse, reporting the
+  live-resolved server address from `inet_server_addr()`, which can be
+  an internal-only address (a container or pod IP) that differs from,
+  and may be unreachable via, the address the operator actually
+  configured. A new `Client.DisplayName()` now backs every one of
+  these responses with the connection's configured `name` (falling
+  back to a password-masked connection string when none is
+  configured); `pg://system_info` gains a `connection_name` field and
+  its `host`/`port` fields now reflect the configured values rather
+  than a live-resolved one. Ad-hoc connection strings a caller types
+  inline (the `postgres://...` mini-DSL supported by `query_database`)
+  are intentionally left as-is, since echoing back what the caller
+  themselves supplied is not a leak. (#187)
+
+- The token and user file watchers now detect changes delivered through an
+  atomically-swapped symlink, such as a Kubernetes-projected Secret or
+  ConfigMap volume, or any tool that renames a new version into place.
+  Previously the watcher matched events by exact filename and only handled
+  `Write`/`Create`, so a symlink swap on a different directory entry (for
+  example Kubernetes' own `..data` symlink) never triggered a reload and
+  updates only took effect on restart. The watcher now reacts to any event
+  in the watched directory and re-resolves and hashes the watched path's
+  content to decide whether a reload is warranted, catching changes that
+  never touch the watched filename directly while still ignoring
+  unrelated activity elsewhere in the directory. (#186)
+
+- Metadata loader now tolerates tables with zero columns
+  (e.g. `CREATE TABLE foo()`). The query LEFT JOINs against the
+  per-column catalog, so a zero-column table produced a row whose
+  `column_name`, `data_type`, and `is_nullable` were all NULL; the
+  scan declared those targets as plain `string` and aborted with
+  `cannot scan NULL into *string`, failing the entire metadata load
+  and surfacing as the misleading `no database connection
+  configured for this token` error. The three columns are now
+  scanned as `sql.NullString` and zero-column tables appear in the
+  metadata with an empty `Columns` slice. (#126)
+
+- HTTP transport now returns `202 Accepted` with an empty body for
+  JSON-RPC notifications, per JSON-RPC 2.0 §4.1 and the MCP streamable
+  HTTP transport spec. Previously, the server replied to notifications
+  with a `200 OK` response that had no `id` field, which is itself not
+  a valid JSON-RPC message and caused strict clients (such as the .NET
+  MCP SDK) to throw on every notification. Unknown notification methods
+  are now also acknowledged silently rather than receiving a `-32601`
+  error reply. (#142)
+
+- Stdio transport now correctly distinguishes JSON-RPC notifications
+  (no `id` member) from requests with an explicit `"id": null` (per
+  JSON-RPC 2.0 §4.1). A request with `"id": null` targeting an unknown
+  method previously matched the same `req.ID == nil` guard used to
+  suppress notification replies and was silently dropped; it now
+  receives the required `-32601 Method not found` response. The
+  hardcoded `notifications/initialized` case was likewise affected and
+  is now filtered uniformly with all other notifications at the read
+  loop, using the same `hasIDField` raw-bytes probe introduced for the
+  HTTP transport in #142. (#152)
+
+- JSON-RPC response now always serializes the `id` field, including
+  when it is null. Per JSON-RPC 2.0 §5.1, the response object MUST
+  include the id member; the value is the originating request's id, or
+  null when the id cannot be determined (parse error / invalid
+  request) or when the request itself used `"id": null`. The
+  `JSONRPCResponse.ID` JSON tag previously used `omitempty`, which
+  caused Go's encoder to drop the field for nil interface values —
+  producing a response without an `id` field, which is itself a
+  malformed JSON-RPC body. This affects both the HTTP and stdio
+  transports. (#152)
+
+- Database switching via `select_database_connection` now persists
+  correctly in HTTP mode for unbound API tokens.
+  `GetAccessibleDatabases` previously returned only the first
+  configured database for unbound tokens, causing `getClient` to
+  silently override the user's selection on every subsequent tool
+  call. The method now returns all databases, matching the behavior
+  of `CanAccessDatabase`. (#117)
+
+- Added a JSON-RPC `ping` handler on both stdio and HTTP transports
+  so MCP clients that issue `ping` during initialization or health
+  checks receive a compliant `{}` result instead of a
+  `-32601 Method not found` error. The stdio handler suppresses
+  responses to notification-style pings (no `id`) per JSON-RPC
+  2.0 §4.1. (#167)
+
+- Fixed port detection on Windows; the installer now reliably
+  detects Postgres instances on all network addresses.
 
 ### Security
 
@@ -537,342 +1037,6 @@ and this project adheres to
   the file with mode `600` before writing to it, so the password is
   never briefly readable beyond the owning user. (#261)
 
-### Fixed
-
-- `resources/read` on an unknown URI now returns a real JSON-RPC error
-  instead of a disguised success. Both resource registries
-  (`internal/resources/registry.go` and the `ContextAwareRegistry`
-  actually wired into the server) returned a "successful" result whose
-  content was a `"Resource not found: ..."` text block, on every
-  revision this server has ever shipped; per the MCP spec, an unknown
-  resource URI is a protocol-level error (`-32002` for a legacy
-  request, `-32602` for a modern one -- see the `Added` entry below).
-  `ContextAwareRegistry.Read` also now checks whether a URI is even a
-  recognised resource *before* acquiring a database client, rather
-  than after: previously, reading an unknown URI without a working
-  database connection returned a database-error message instead of a
-  not-found one, since acquiring a client came first regardless of
-  whether the resource existed at all.
-- The conversation actions menu in the status banner header no longer
-  offers a "Delete conversation" item that does not delete anything. That
-  action resets the chat window and starts a new conversation; it never
-  removed the conversation from the conversation list, so a selected
-  conversation appeared to survive the delete. The item is now labelled
-  "Clear conversation", and its confirmation dialog explains that the
-  conversation stays in the list, where the per-conversation delete button
-  removes it for good. (#223)
-
-- Tool calls made over the streaming chat endpoint are no longer silently
-  dropped, which showed up in the web client as "No response received"
-  whenever a provider decided to call a tool. The terminating `done` frame
-  of that stream carries a chunk structure with no field for a stop
-  reason, so the client had nothing to read and fell back to assuming
-  `end_turn`; the agentic loop then looked only for text blocks and
-  ignored the `tool_use` block sitting alongside them. The OpenAI
-  provider hit this on every tool call, because it reports a distinct
-  `tool_calls` finish reason that had no way of reaching the client. The
-  client now infers `tool_use` when the assembled response contains a
-  `tool_use` block and the server reported `end_turn` or nothing at all,
-  leaving a more specific reason such as `max_tokens` untouched.
-
-- Reading an MCP resource after an idle period no longer reports the
-  database as unavailable. Metadata expires once it is older than
-  `metadata_ttl` (five minutes by default), and `IsMetadataLoaded()`
-  returns false both for a connection that has never loaded any metadata
-  and for one whose metadata has simply aged out. The resource path
-  treated the second case as a database that was not ready, so it
-  returned a retryable `DATABASE_NOT_READY` without attempting a reload;
-  the web client's status banner then showed "Database is switching",
-  retried five times, and settled on "Database switch taking longer than
-  expected", all against a perfectly healthy database. The MCP tools
-  already reloaded in this situation, so only resources were affected.
-  Both resource paths now reload expired metadata through a new
-  `EnsureMetadata` helper, and report `DATABASE_NOT_READY` only when that
-  reload genuinely fails. Raising `metadata_ttl` is no longer needed as a
-  workaround. At most one reload per connection runs at a time, and
-  callers arriving whilst one is in flight wait for it and share its
-  outcome, so a burst arriving once the TTL has expired issues one catalog
-  query between them rather than one each; the status banner refreshing
-  several resources at once makes such bursts routine. Sharing the outcome
-  matters most when the database is unreachable, since a retry per caller
-  would queue one connect timeout each. Failures are not cached, so the
-  next caller to arrive starts a fresh attempt.
-
-- `make test` now runs every package that has tests. Ten packages were absent
-  from the server target and so were never exercised by the suite or by
-  continuous integration: `api`, `compactor`, `conversations`, `definitions`,
-  `httperror`, `llmtracing`, `logging`, `prompts`, `search` and `tsv`. All of
-  them pass; they were simply never run.
-
-- `tools/list`, `prompts/list`, and `resources/list` now return their
-  entries in a stable, sorted order on every call. Each registry stored
-  its entries in a Go map and built the response by iterating it
-  directly, so the order was randomised by the runtime and changed from
-  one call to the next even when the underlying set was unchanged. Tool,
-  prompt, and resource definitions sit at the front of the prompt sent to
-  the model, so the reshuffling invalidated the provider-side prompt
-  cache on every request rather than only when the set actually changed,
-  and it defeated client-side diffing of the advertised list for the
-  same reason. `Registry.List()` in each of `internal/tools`,
-  `internal/prompts`, and `internal/resources` now sorts by name (tools,
-  prompts) or URI (resources) before returning; `ContextAwareRegistry.List()`
-  in `internal/resources`, which merges a fixed built-in entry with a map
-  of custom resources, sorts its combined result the same way. Every
-  registration is keyed by its own name or URI in this codebase today,
-  so the sort has no ties to break in practice, but the comparison also
-  falls back to the registration key, which is unique by construction:
-  `sort.Slice` gives no ordering guarantee between two entries that
-  compare equal, so a future entry whose Definition happened to
-  advertise the same name or URI as another under a different key would
-  otherwise be exactly as nondeterministic as before this fix. Fixes
-  #211.
-
-- `initialize` no longer echoes back whatever `protocolVersion` a client
-  requests. Version negotiation is the server's half of the MCP
-  handshake: the client proposes a revision, and the server is supposed
-  to reply with the revision it will actually speak, which the client
-  then checks against what it supports. Echoing the request answers
-  with no information at all, so a client asking for a revision this
-  server does not implement was told that revision was accepted, and
-  found out otherwise later, against a missing capability, rather than
-  at the version check meant to catch exactly this case. `initialize`
-  (stdio) and `initialize` over HTTP now both call a shared
-  `NegotiateProtocolVersion`, which returns the newest revision this
-  server supports at or below the client's request, or the oldest
-  supported revision if the request predates everything the server
-  implements. This server currently implements one revision,
-  `2024-11-05`, so today every negotiation converges on that value
-  regardless of what a client asked for; the function is structured to
-  extend cleanly if a second revision is added later. The bundled CLI
-  and web client are unaffected, since both already request
-  `2024-11-05` exactly.
-
-  `initialize` over HTTP also now rejects malformed parameters with a
-  proper `-32602 Invalid params` error, matching every other HTTP handler
-  and the stdio transport's existing behaviour. The HTTP handler
-  previously never read the client's parameters at all, so it accepted
-  anything; it now parses them, and a field of the wrong JSON type, such
-  as a numeric `protocolVersion` or a `clientInfo` that is not an object,
-  fails the handshake instead of silently falling back to the server's
-  default. Omitting the parameters entirely still succeeds and yields
-  that default. Fixes #212.
-
-### Added
-
-- The server now implements the current MCP specification revision,
-  `2026-07-28`, alongside its original revision, `2024-11-05`, on both
-  transports at once (dual-era, per the versioning spec's own
-  guidance). A request whose `params._meta` carries
-  `io.modelcontextprotocol/protocolVersion` is served under the new,
-  stateless model: `server/discover` (required by the spec for every
-  server), per-request `_meta` negotiation in place of the removed
-  `initialize` handshake, `resultType`/`ttlMs`/`cacheScope` on results,
-  and the Streamable HTTP transport's required
-  `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Name` headers. A request
-  without that `_meta` field, including every `initialize` handshake
-  -- which covers the bundled CLI and web client, and every existing
-  integration test -- is served exactly as before this change, with no
-  observable difference. Conversely, an `initialize` request that does
-  carry that `_meta` field is rejected with `-32601 Method not found`
-  on both transports, matching the modern era's method set, which has
-  no handshake to answer -- and, on HTTP, this and every other
-  `-32601` for a modern request now pairs with HTTP `404`, per the
-  transport spec's own reasoning: it is what lets a client tell this
-  server apart from a legacy HTTP+SSE server that doesn't host the
-  endpoint at all. A present `MCP-Protocol-Version` header now also
-  marks an HTTP request modern even when its body doesn't, since no
-  client older than `2025-06-18` ever sends that header; a modern
-  `ping` over stdio now carries `resultType` like every other modern
-  result, matching what it already carried over HTTP. See [MCP
-  Specification
-  Compliance](developers/mcp-spec-compliance.md) for the full
-  negotiation rules and, importantly, what was deliberately not
-  adopted from this revision and why (`subscriptions/listen`, Multi
-  Round-Trip Requests/Roots/Sampling/Elicitation, `x-mcp-header`,
-  OAuth-related changes, and icons): none of them have anything for
-  this server to attach to today.
-
-- A `make vulncheck` target runs `govulncheck` over the module, using
-  call-graph analysis to prioritize known vulnerabilities that this code can
-  actually reach over every advisory affecting a dependency. See
-  [Development](contributing/development.md) for details.
-
-- Database configuration now accepts `sslcert`, `sslkey`, and
-  `sslrootcert` fields, letting the server authenticate to PostgreSQL
-  with a client certificate instead of, or alongside, a password.
-  Configure them with `databases[].sslcert`, `databases[].sslkey`,
-  and `databases[].sslrootcert` in the configuration file, the
-  `-db-sslcert`, `-db-sslkey`, and `-db-sslrootcert` CLI flags, or the
-  `PGEDGE_DB_SSLCERT`/`PGSSLCERT`, `PGEDGE_DB_SSLKEY`/`PGSSLKEY`, and
-  `PGEDGE_DB_SSLROOTCERT`/`PGSSLROOTCERT` environment variables.
-  `sslcert` and `sslkey` must be set together. `sslrootcert` takes
-  effect only under `sslmode` `require`, `verify-ca`, or `verify-full`;
-  under `disable`, `allow`, or `prefer` (the default) pgx never checks
-  the server certificate against it and silently ignores the value,
-  matching libpq and `psql`. In HTTP mode, changing any of these fields and
-  reloading the configuration (`SIGHUP`) now closes pooled per-token
-  connections so they reconnect with the new certificate settings.
-
-- A configurable per-attempt timeout bounds each individual HTTP attempt
-  to an LLM or embedding provider, so a single slow attempt becomes
-  retryable instead of consuming the whole request budget; the
-  knowledgebase embedding path honours the same setting. Configure it
-  with `per_attempt_timeout` in the `llm` and `embedding` config
-  sections, `embedding_per_attempt_timeout` in the `knowledgebase`
-  section, or the `PGEDGE_LLM_PER_ATTEMPT_TIMEOUT`,
-  `PGEDGE_EMBEDDING_PER_ATTEMPT_TIMEOUT`, and
-  `PGEDGE_KB_EMBEDDING_PER_ATTEMPT_TIMEOUT` environment variables
-  (default 60 seconds; set the corresponding environment variable to 0
-  to disable the cap).
-
-- Similarity search now validates the query embedding dimension against
-  the target vector column before querying, returning a clear error on a
-  mismatch instead of a raw database error.
-
-- Similarity search now supports pgvector `halfvec` columns; it detects
-  the column type and casts the query vector accordingly (requires
-  pgvector 0.7.0 or later).
-
-- The web client now uses the provider display name reported by the
-  proxy, falling back to its built-in labels when none is supplied.
-
-- Each built-in tool, resource, and prompt can now be enabled or
-  disabled via an environment variable in addition to the
-  `builtins` section of the configuration file. The variables are
-  `PGEDGE_BUILTIN_TOOL_*`, `PGEDGE_BUILTIN_RESOURCE_*`, and
-  `PGEDGE_BUILTIN_PROMPT_*`; see the configuration reference for
-  the complete list. This is useful in containerized deployments
-  where editing the configuration file is awkward. (#139)
-
-### Changed
-
-- The LLM provider clients (Anthropic, OpenAI, and Ollama) now use the
-  shared
-  [`pgedge-go-llm-lib`](https://github.com/pgEdge/pgedge-go-llm-lib)
-  library instead of hand-rolled HTTP wire code; approximately 1500
-  lines of provider-specific code are removed from `internal/chat/`.
-  Behaviour is preserved; the `LLMClient` interface is unchanged.
-
-- Anthropic prompt caching now covers both the tools block and the
-  system prompt (the library exposes a `WithSystemCaching` builder
-  alongside `WithToolCaching`). Long system prompts no longer pay
-  full input-token cost on every turn.
-
-- OpenAI models that require the Responses API (`gpt-5-*`, `o1-*`,
-  `o3-*`) are now supported transparently; the library routes them
-  to `/v1/responses` automatically based on the model name.
-
-- Embedding provider clients (Voyage, OpenAI, Ollama) now use the
-  shared
-  [`pgedge-go-llm-lib`](https://github.com/pgEdge/pgedge-go-llm-lib)
-  library instead of hand-rolled HTTP wire code. Approximately 1100
-  lines of provider-specific code are removed from
-  `internal/embedding/`. The `Provider` interface and `NewProvider`
-  factory are preserved; tool consumers (search_knowledgebase,
-  generate_embedding, similarity_search) compile unchanged.
-
-- `Provider.Dimensions()` is now lazily populated from the first
-  successful `Embed` call; it returns 0 before any embedding has been
-  generated (previously the value was hard-coded per known model).
-
-- Refactored `Client.LoadMetadataFor` in
-  `internal/database/connection.go`. The CTE-based metadata query
-  now lives in `internal/database/load_metadata.sql` and is loaded
-  via `//go:embed`; the per-row scan and the grouping/transform
-  logic are split into `scanMetadataRow` and `buildTableInfo` in
-  `internal/database/metadata.go`. `buildTableInfo` is pure and is
-  covered by table-driven unit tests that do not require a live
-  database. No behavior change. (#153)
-
-- The built-in `pg://system_info` resource now uses the machine-safe
-  name `postgresql_system_info` (previously
-  `"PostgreSQL System Information"`). The new name matches the
-  identifier pattern enforced by Anthropic's tool-name validation
-  (`^[a-zA-Z0-9_-]{1,128}$`), so the resource no longer breaks
-  interoperability when a downstream MCP client forwards built-in
-  capability names as provider tool names. The resource URI is
-  unchanged. (#139)
-
-- The KB Builder (formerly `cmd/kb-builder` and the
-  `internal/kb*` packages) has moved to a standalone project at
-  [`pgedge-ai-kb`](https://github.com/pgEdge/pgedge-ai-kb). The
-  binary is renamed from `pgedge-nla-kb-builder` to
-  `pgedge-ai-kb-builder`. The MCP server itself is unaffected; it
-  continues to consume a pre-built `kb.db` at runtime. The Docker
-  build now downloads `kb.db` from
-  `https://github.com/pgEdge/pgedge-ai-kb/releases/download/kb-latest/kb.db`
-  by default; pass `KB_SOURCE` to override. The
-  `pgedge-nla-kb-builder_*` release archives are no longer published
-  from this repository.
-
-- The LLM HTTP proxy is now provided by `pgedge-go-llm-lib`'s
-  `llm/proxy` package, mounted at `/api/llm/`. The endpoints moved
-  from `/api/llm/{providers,models,chat}` to `/api/llm/v1/*`, and
-  the request/response wire format now uses typed content blocks
-  (see the library's `llm.ChatRequest` and `llm.ContentBlock`).
-  `internal/llmproxy/` is deleted; tracing plumbs through proxy
-  hooks via the new `internal/llmtracing` package.
-
-- A streaming chat endpoint `/api/llm/v1/chat/stream` (SSE) is now
-  exposed alongside the non-streaming endpoint. The non-streaming
-  `/v1/chat` endpoint remains available for callers that prefer it.
-
-- The web chat interface now consumes the streaming endpoint
-  `/api/llm/v1/chat/stream` (Server-Sent Events) and renders the
-  assistant response incrementally as chunks arrive. The
-  non-streaming endpoint stays available for callers that prefer
-  it. A new `web/src/utils/sseChat.js` helper handles the SSE
-  parsing and assembles the final response into the same shape
-  the non-streaming endpoint returns, so the agentic chat loop is
-  unchanged.
-
-- The tools `search_knowledgebase`, `generate_embedding`, and
-  `similarity_search` now construct their embedding client
-  directly via `llm.NewClient` rather than going through the old
-  `embedding.NewProvider` wrapper. The `internal/embedding/`
-  package is deleted entirely.
-
-- The temporary `chat.LLMClient` interface and `libClient` adapter
-  added in the first migration PR are removed. The CLI chat client
-  now consumes `pgedge-go-llm-lib`'s `llm.Client` API directly.
-  `internal/chat/llm.go` and `internal/chat/llm_translate.go` are
-  deleted; messages and content blocks flow through the chat
-  package as `llm.Message` and `llm.ContentBlock` rather than
-  chat-package wrapper types. The library's `llm.Client` API
-  itself is unchanged. The CLI's debug-mode HTTP tracing still
-  injects via `llm.Options.HTTPClient`.
-
-- Saved conversations from earlier versions are migrated on load:
-  messages with a plain-string `content` field are wrapped as a
-  single text content block, and tool-result messages saved with
-  role `"user"` are promoted to role `"tool"` to match the
-  library's expected shape. The on-disk JSON written by this and
-  later versions uses the typed content-block format directly.
-
-- The web client now groups the conversation-level Save and Delete
-  actions in a new menu in the status banner header, alongside the
-  database switcher and connection details, rather than placing them
-  next to the message input. This keeps the destructive Delete action
-  away from the Send button and clarifies that the actions affect the
-  whole conversation. Deleting a conversation now requires confirmation
-  via a dialog instead of a browser prompt. (#73)
-
-- Custom `pl-func` tools now fail immediately, with an explanation, on
-  a database connection that does not permit writes. Such a tool
-  creates and drops a temporary function, which a read-only
-  transaction cannot do, so it previously failed partway through with
-  an opaque permissions error that invited disabling read-only mode as
-  the remedy. Use a `pl-do` tool on a read-only connection.
-
-- The read-only statement guard no longer rejects a query merely for
-  mentioning `transaction_read_only` or `default_transaction_read_only`
-  inside a string literal or a comment, so an ordinary lookup such as
-  `SELECT * FROM config WHERE key = 'transaction_read_only'` is now
-  permitted. A rejection additionally requires a construct capable of
-  changing a setting.
-
-### Security
-
 - Read-only connections no longer accept more than one SQL statement
   per request. `query_database` previously executed any statement that
   did not begin with `SELECT`, `WITH`, `TABLE`, or `VALUES` through
@@ -946,172 +1110,11 @@ and this project adheres to
   therefore never briefly writable, and the mode cannot fail to apply
   independently of the transaction starting.
 
-### Fixed
-
-- Metadata loader no longer emits duplicate column entries for a
-  column that participates in more than one foreign-key constraint.
-  The `fk_columns` CTE produced one row per foreign key, so the
-  downstream LEFT JOIN multiplied the per-column rows; `get_schema_info`
-  consequently listed the affected column once per foreign key. The CTE
-  now aggregates every reference into one ordered, de-duplicated array
-  per column, and `ColumnInfo.ForeignKeyRefs` is a `[]string` so all
-  references are surfaced (comma-separated in the `fk_ref` output
-  column) rather than silently discarding all but one. (#171)
-
-- The edit and delete icons in the conversation history list no longer
-  overlap the conversation title; the list item now reserves enough
-  space for both controls so long titles ellipsize cleanly. (#73)
-
-- Every HTTP error response is now a consistent JSON object
-  (`{"error": "..."}`) with an appropriate status code, including
-  framework-level cases that previously bypassed the normal handlers
-  and returned a plaintext or empty body: an unknown route (404), a
-  method mismatch (405), an oversized request body (413, distinguished
-  from other body-read failures), and a panic inside a handler (500;
-  previously the connection was simply closed with no response at
-  all). A shared `internal/httperror` helper backs the new panic
-  recovery and 404 catch-all middleware, as well as the handlers that
-  previously wrote plaintext errors via `http.Error`
-  (`/mcp/v1`, `/api/chat/compact`, `/api/openapi.json`, and the
-  session-auth wrapper). Request bodies on `/api/chat/compact`,
-  `/api/databases/select`, and the `/api/conversations*` endpoints are
-  now also capped at 10MB, matching the existing `/mcp/v1` limit. The
-  HTTP server now sets `ReadHeaderTimeout`, `ReadTimeout`, and
-  `IdleTimeout` to guard against slow-header and slow-body attacks;
-  these fire before a request reaches a handler, so (unlike the cases
-  above) there is no response body to produce. Every 405 response now
-  also sets the `Allow` header naming the supported method(s), per
-  RFC 7231 §6.5.5. `GET /api/databases`'s 405 uses the shared
-  `internal/httperror` writer; `POST /api/databases/select`'s 405 uses
-  the endpoint's own documented `{"success": false, "error": "..."}`
-  shape instead, matching its other error responses (400, 404, 403)
-  rather than the bare `{"error": "..."}` it previously returned only
-  for that one status code. (#189)
-
-- Tool and resource responses now show the operator-configured database
-  display name instead of the raw connection details. Previously,
-  `query_database`, `get_schema_info`, `execute_explain`, `count_rows`,
-  and `similarity_search` only masked the password in the connection
-  string they showed the caller, leaving the real host, port, and
-  database name visible; `pg://system_info` was worse, reporting the
-  live-resolved server address from `inet_server_addr()`, which can be
-  an internal-only address (a container or pod IP) that differs from,
-  and may be unreachable via, the address the operator actually
-  configured. A new `Client.DisplayName()` now backs every one of
-  these responses with the connection's configured `name` (falling
-  back to a password-masked connection string when none is
-  configured); `pg://system_info` gains a `connection_name` field and
-  its `host`/`port` fields now reflect the configured values rather
-  than a live-resolved one. Ad-hoc connection strings a caller types
-  inline (the `postgres://...` mini-DSL supported by `query_database`)
-  are intentionally left as-is, since echoing back what the caller
-  themselves supplied is not a leak. (#187)
-
-- The token and user file watchers now detect changes delivered through an
-  atomically-swapped symlink, such as a Kubernetes-projected Secret or
-  ConfigMap volume, or any tool that renames a new version into place.
-  Previously the watcher matched events by exact filename and only handled
-  `Write`/`Create`, so a symlink swap on a different directory entry (for
-  example Kubernetes' own `..data` symlink) never triggered a reload and
-  updates only took effect on restart. The watcher now reacts to any event
-  in the watched directory and re-resolves and hashes the watched path's
-  content to decide whether a reload is warranted, catching changes that
-  never touch the watched filename directly while still ignoring
-  unrelated activity elsewhere in the directory. (#186)
-
-- Metadata loader now tolerates tables with zero columns
-  (e.g. `CREATE TABLE foo()`). The query LEFT JOINs against the
-  per-column catalog, so a zero-column table produced a row whose
-  `column_name`, `data_type`, and `is_nullable` were all NULL; the
-  scan declared those targets as plain `string` and aborted with
-  `cannot scan NULL into *string`, failing the entire metadata load
-  and surfacing as the misleading `no database connection
-  configured for this token` error. The three columns are now
-  scanned as `sql.NullString` and zero-column tables appear in the
-  metadata with an empty `Columns` slice. (#126)
-- HTTP transport now returns `202 Accepted` with an empty body for
-  JSON-RPC notifications, per JSON-RPC 2.0 §4.1 and the MCP streamable
-  HTTP transport spec. Previously, the server replied to notifications
-  with a `200 OK` response that had no `id` field, which is itself not
-  a valid JSON-RPC message and caused strict clients (such as the .NET
-  MCP SDK) to throw on every notification. Unknown notification methods
-  are now also acknowledged silently rather than receiving a `-32601`
-  error reply. (#142)
-
-- Stdio transport now correctly distinguishes JSON-RPC notifications
-  (no `id` member) from requests with an explicit `"id": null` (per
-  JSON-RPC 2.0 §4.1). A request with `"id": null` targeting an unknown
-  method previously matched the same `req.ID == nil` guard used to
-  suppress notification replies and was silently dropped; it now
-  receives the required `-32601 Method not found` response. The
-  hardcoded `notifications/initialized` case was likewise affected and
-  is now filtered uniformly with all other notifications at the read
-  loop, using the same `hasIDField` raw-bytes probe introduced for the
-  HTTP transport in #142. (#152)
-
-- JSON-RPC response now always serializes the `id` field, including
-  when it is null. Per JSON-RPC 2.0 §5.1, the response object MUST
-  include the id member; the value is the originating request's id, or
-  null when the id cannot be determined (parse error / invalid
-  request) or when the request itself used `"id": null`. The
-  `JSONRPCResponse.ID` JSON tag previously used `omitempty`, which
-  caused Go's encoder to drop the field for nil interface values —
-  producing a response without an `id` field, which is itself a
-  malformed JSON-RPC body. This affects both the HTTP and stdio
-  transports. (#152)
-
-- Database switching via `select_database_connection` now persists
-  correctly in HTTP mode for unbound API tokens.
-  `GetAccessibleDatabases` previously returned only the first
-  configured database for unbound tokens, causing `getClient` to
-  silently override the user's selection on every subsequent tool
-  call. The method now returns all databases, matching the behavior
-  of `CanAccessDatabase`. (#117)
-
-- Added a JSON-RPC `ping` handler on both stdio and HTTP transports
-  so MCP clients that issue `ping` during initialization or health
-  checks receive a compliant `{}` result instead of a
-  `-32601 Method not found` error. The stdio handler suppresses
-  responses to notification-style pings (no `id`) per JSON-RPC
-  2.0 §4.1. (#167)
-
-### Added
-
-- The installer detects running Postgres instances and offers
-  to connect to them, with automatic database listing.
-
-- Added `--detect` / `-Detect` flag for non-interactive
-  auto-connection to detected Postgres instances.
-
-- The installer detects previous installations and offers
-  to update the binary or reconfigure the database connection
-  instead of re-running the full install flow.
-
-- Schema metadata cache now refreshes automatically based on a
-  configurable TTL. The `metadata_ttl` database option controls
-  how long cached metadata remains valid (default: 5 minutes).
-  This fixes an issue where `get_schema_info` returned stale
-  results when tables were created outside the MCP server or
-  when using read-only database connections.
-
-- HTTP authentication is now configurable in Docker deployments
-  via the `PGEDGE_AUTH_ENABLED` environment variable. Auth remains
-  enabled by default; set `PGEDGE_AUTH_ENABLED=false` only in
-  trusted local development environments (for example, when
-  connecting Claude through `mcp-remote` with a fixed bearer
-  token and needing access to multiple databases). The setting is
-  honored by both the single-database and multi-database
-  initialization paths. (#167)
-
-- Google Gemini is now a supported LLM provider. Configure via
-  `gemini_api_key` / `gemini_api_key_file` in the config file or
-  via the `PGEDGE_GEMINI_API_KEY` / `GEMINI_API_KEY` environment
-  variables.
-
-### Fixed
-
-- Fixed port detection on Windows; the installer now reliably
-  detects Postgres instances on all network addresses.
+- `golang.org/x/crypto` moves from v0.54.0 to v0.55.0, so the TLS and
+  SSH primitives this server depends on carry the latest upstream
+  hardening. Nothing in this project's own code changes with the
+  upgrade; it is taken so that a build of this release starts from a
+  current cryptographic base rather than a superseded one.
 
 ## [1.0.0] - 2026-03-27
 
