@@ -112,11 +112,12 @@ func durationMs(d time.Duration) *int64 {
 
 // Tracer writes structured trace entries to a JSONL file.
 type Tracer struct {
-	mu       sync.Mutex
-	file     *os.File
-	encoder  *json.Encoder
-	enabled  bool
-	filePath string
+	mu           sync.Mutex
+	file         *os.File
+	encoder      *json.Encoder
+	enabled      bool
+	filePath     string
+	metadataOnly bool
 }
 
 var (
@@ -126,8 +127,10 @@ var (
 
 // Initialize performs one-time initialization of the global tracer.
 // If filePath is empty, tracing remains disabled. Errors are non-fatal
-// and do not prevent server startup.
-func Initialize(filePath string) error {
+// and do not prevent server startup. When metadataOnly is true, trace
+// entries omit their Parameters and Result fields entirely, so only
+// call metadata (session, token, name, duration, error) is written.
+func Initialize(filePath string, metadataOnly bool) error {
 	var initErr error
 
 	once.Do(func() {
@@ -145,10 +148,11 @@ func Initialize(filePath string) error {
 		enc.SetEscapeHTML(false)
 
 		instance = &Tracer{
-			file:     f,
-			encoder:  enc,
-			enabled:  true,
-			filePath: filePath,
+			file:         f,
+			encoder:      enc,
+			enabled:      true,
+			filePath:     filePath,
+			metadataOnly: metadataOnly,
 		}
 	})
 
@@ -183,8 +187,44 @@ func GetFilePath() string {
 	return instance.filePath
 }
 
+// metadataOnlyErrorPlaceholder replaces an entry's Error text in
+// metadata-only mode, since driver and query errors can themselves
+// echo back query text or data values (e.g. constraint violation
+// messages that quote the offending row).
+const metadataOnlyErrorPlaceholder = "error (detail omitted in metadata-only trace mode)"
+
+// SetMetadataOnly updates whether the tracer redacts Parameters/Result
+// from entries logged from this point on. Unlike Initialize, which is
+// one-time (opening the trace file is a startup-only decision), this
+// may be called any number of times, so that a configuration reload
+// can turn metadata-only mode on or off for an already-running server
+// without needing to restart it just to change that one setting. A
+// no-op if tracing was never initialized.
+func SetMetadataOnly(metadataOnly bool) {
+	if instance == nil {
+		return
+	}
+	instance.mu.Lock()
+	defer instance.mu.Unlock()
+	instance.metadataOnly = metadataOnly
+}
+
 // Log writes a single trace entry to the JSONL file. It auto-sets
-// Timestamp to the current time if the field is zero.
+// Timestamp to the current time if the field is zero. When the tracer
+// is configured for metadata-only mode, Parameters, Result, and
+// Metadata are all dropped before the entry is written, regardless of
+// entry type, and any Error text is replaced with a generic
+// placeholder so failure is still visible without leaking
+// error-message detail.
+//
+// Metadata is cleared rather than allow-listed: it's a caller-supplied
+// map (LogDatabaseSwitch, LogSessionStart/End, LogConfigReload, and
+// any future Log* helper all accept one), so it's exactly as capable
+// of carrying real data as Parameters or Result, and an allowlist
+// would only protect the keys known about today. A denylist by field
+// name is what let issue #262 happen in the first place
+// (sanitizeParams/sanitizeResult); blanket omission is what makes this
+// mode's guarantee hold for entry shapes that don't exist yet.
 func Log(entry TraceEntry) {
 	if !IsEnabled() {
 		return
@@ -196,6 +236,17 @@ func Log(entry TraceEntry) {
 
 	instance.mu.Lock()
 	defer instance.mu.Unlock()
+
+	// metadataOnly is read under the same lock that SetMetadataOnly
+	// writes it under, so a concurrent reload can't race this check.
+	if instance.metadataOnly {
+		entry.Parameters = nil
+		entry.Result = nil
+		entry.Metadata = nil
+		if entry.Error != "" {
+			entry.Error = metadataOnlyErrorPlaceholder
+		}
+	}
 
 	// Errors during trace writing are intentionally silenced to avoid
 	// disrupting normal server operation.

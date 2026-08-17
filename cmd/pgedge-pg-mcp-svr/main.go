@@ -71,6 +71,7 @@ func main() {
 	noAuth := flag.Bool("no-auth", false, "Disable API token authentication in HTTP mode")
 	debug := flag.Bool("debug", false, "Enable debug logging (logs HTTP requests/responses)")
 	traceFile := flag.String("trace-file", "", "Path to trace output file (JSONL format)")
+	traceMetadataOnly := flag.Bool("trace-metadata-only", false, "Omit parameters/results from trace entries, keeping only call metadata")
 	tokenFilePath := flag.String("token-file", "", "Path to API token file")
 	showOpenAPI := flag.Bool("openapi", false, "Output OpenAPI specification as JSON and exit")
 
@@ -375,6 +376,9 @@ func main() {
 		case "trace-file":
 			cliFlags.TraceFileSet = true
 			cliFlags.TraceFile = *traceFile
+		case "trace-metadata-only":
+			cliFlags.TraceMetadataOnlySet = true
+			cliFlags.TraceMetadataOnly = *traceMetadataOnly
 		}
 	})
 
@@ -455,8 +459,10 @@ func main() {
 
 	// Initialize tracing if configured
 	if cfg.TraceFile != "" {
-		if err := tracing.Initialize(cfg.TraceFile); err != nil {
+		if err := tracing.Initialize(cfg.TraceFile, cfg.IsTraceMetadataOnly()); err != nil {
 			fmt.Fprintf(os.Stderr, "WARNING: Failed to initialize tracing: %v\n", err)
+		} else if cfg.IsTraceMetadataOnly() {
+			fmt.Fprintf(os.Stderr, "Tracing: ENABLED (%s, metadata-only)\n", cfg.TraceFile)
 		} else {
 			fmt.Fprintf(os.Stderr, "Tracing: ENABLED (%s)\n", cfg.TraceFile)
 		}
@@ -1099,12 +1105,28 @@ func main() {
 			DBHostsSet:              cliFlags.DBHostsSet,
 			DBTargetSessionAttrs:    *dbTargetSessionAttrs,
 			DBTargetSessionAttrsSet: cliFlags.DBTargetSessionAttrsSet,
+			TraceFile:               *traceFile,
+			TraceFileSet:            cliFlags.TraceFileSet,
+			TraceMetadataOnly:       *traceMetadataOnly,
+			TraceMetadataOnlySet:    cliFlags.TraceMetadataOnlySet,
 		}
 		reloadableCfg := config.NewReloadableConfig(cfg, configPath, reloadCLIFlags)
 
 		// Register callback to update client manager when databases change
 		reloadableCfg.OnReload(func(newCfg *config.Config) {
 			clientManager.UpdateDatabaseConfigs(newCfg.Databases)
+		})
+
+		// trace_metadata_only can change on a running server: unlike
+		// trace_file itself (opening/closing the trace file is a
+		// startup-only decision behind tracing.Initialize's sync.Once),
+		// it's just a flag Log() consults on every call, so there's no
+		// reason an operator should need a restart just to turn
+		// redaction on or off.
+		reloadableCfg.OnReload(func(newCfg *config.Config) {
+			if tracing.IsEnabled() {
+				tracing.SetMetadataOnly(newCfg.IsTraceMetadataOnly())
+			}
 		})
 
 		// Start SIGHUP listener

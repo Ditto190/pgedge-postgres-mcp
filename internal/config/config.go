@@ -54,6 +54,21 @@ type Config struct {
 
 	// Trace file path (for logging MCP requests/responses in JSONL format)
 	TraceFile string `yaml:"trace_file"`
+
+	// Trace metadata only (omit parameters/results from trace entries,
+	// keeping only session, token, name, duration, and error/success).
+	// A pointer, like the Builtins.Tools.* fields below, so mergeConfig
+	// can tell "the file didn't mention this" (nil) apart from "the file
+	// explicitly set it to false" (non-nil pointing to false); a plain
+	// bool can't make that distinction, since both cases parse to the
+	// zero value.
+	TraceMetadataOnly *bool `yaml:"trace_metadata_only"`
+}
+
+// IsTraceMetadataOnly reports whether metadata-only tracing is enabled,
+// defaulting to false (full detail) when unset.
+func (c *Config) IsTraceMetadataOnly() bool {
+	return c.TraceMetadataOnly != nil && *c.TraceMetadataOnly
 }
 
 // BuiltinsConfig holds configuration for enabling/disabling built-in tools, resources, and prompts
@@ -650,6 +665,10 @@ type CLIFlags struct {
 	// Trace file flags
 	TraceFile    string
 	TraceFileSet bool
+
+	// Trace metadata-only flag
+	TraceMetadataOnly    bool
+	TraceMetadataOnlySet bool
 }
 
 // defaultConfig returns configuration with hard-coded defaults
@@ -985,6 +1004,11 @@ func mergeConfig(dest, src *Config) {
 	// Trace file
 	if src.TraceFile != "" {
 		dest.TraceFile = src.TraceFile
+	}
+
+	// Trace metadata only (pointer preserves an explicit false)
+	if src.TraceMetadataOnly != nil {
+		dest.TraceMetadataOnly = src.TraceMetadataOnly
 	}
 
 	// Builtins - merge individual settings (pointer fields preserve explicit false values)
@@ -1362,6 +1386,9 @@ func applyEnvironmentVariables(cfg *Config) {
 	// Trace file
 	setStringFromEnv(&cfg.TraceFile, "PGEDGE_TRACE_FILE")
 
+	// Trace metadata only
+	setBoolPtrFromEnv(&cfg.TraceMetadataOnly, "PGEDGE_TRACE_METADATA_ONLY")
+
 	// Built-in tools, resources, and prompts.
 	// Useful for containerized deployments where editing the config file is awkward.
 	// Tools
@@ -1481,6 +1508,11 @@ func applyCLIFlags(cfg *Config, flags CLIFlags) error {
 	// Trace file
 	if flags.TraceFileSet {
 		cfg.TraceFile = flags.TraceFile
+	}
+
+	// Trace metadata only
+	if flags.TraceMetadataOnlySet {
+		cfg.TraceMetadataOnly = &flags.TraceMetadataOnly
 	}
 
 	return nil
