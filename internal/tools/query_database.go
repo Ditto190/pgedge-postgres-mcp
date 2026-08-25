@@ -91,6 +91,100 @@ func resolveRowLimit(args map[string]any) int {
 var limitKeywordPattern = regexp.MustCompile(`(?i)(?:^|[^A-Z0-9_$])(LIMIT)(?:[^A-Z0-9_$]|$)`)
 var offsetKeywordPattern = regexp.MustCompile(`(?i)(?:^|[^A-Z0-9_$])(OFFSET)(?:[^A-Z0-9_$]|$)`)
 
+// stripLeadingParens peels away wrapping parentheses so a statement written
+// as "(SELECT ...)" is still recognised as a SELECT by the keyword-prefix
+// checks below (issue #275). It only ever narrows what's inspected for
+// classification purposes; the query actually executed is untouched.
+func stripLeadingParens(s string) string {
+	for strings.HasPrefix(s, "(") {
+		depth := 0
+		closeAt := -1
+		for i := 0; i < len(s); i++ {
+			switch s[i] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 {
+					closeAt = i
+				}
+			}
+			if closeAt >= 0 {
+				break
+			}
+		}
+		if closeAt < 0 {
+			break // unbalanced; leave as-is for the prefix check to reject
+		}
+		inner := strings.TrimSpace(s[1:closeAt])
+		if inner == "" {
+			break
+		}
+		s = inner
+	}
+	return s
+}
+
+// normalizeForClassification produces the text used to decide a
+// statement's type (SELECT/DDL/DML/RETURNING): comments and literals
+// stripped via sqltext.Strip, any wrapping parentheses peeled off, upper-
+// cased. Without this a leading comment or a parenthesised SELECT falls
+// through every HasPrefix check below, which meant no LIMIT was appended
+// and no truncation marker was ever emitted for it (issue #275).
+func normalizeForClassification(sqlQuery string) string {
+	residue, _ := sqltext.Strip(sqlQuery)
+	return strings.ToUpper(stripLeadingParens(strings.TrimSpace(residue)))
+}
+
+// redundantWrapDepth reports how many layers of parentheses wrap the
+// ENTIRE statement -- e.g. 2 for "((SELECT ...))" but 0 for
+// "(SELECT ...) UNION (SELECT ...)", where the first '(' closes well
+// before the end of the string rather than at it. Unlike
+// stripLeadingParens, this never discards any text: it only measures how
+// many redundant layers exist, since a caller needs the untouched
+// residue to still search it (issue #275 follow-up).
+//
+// This distinction matters because such a wrap contributes nothing to
+// the statement's meaning: "(SELECT ... LIMIT 5)" behaves exactly like
+// "SELECT ... LIMIT 5" as a complete statement, so a clause inside it is
+// just as much "top level" as one with no wrapping at all.
+func redundantWrapDepth(s string) int {
+	s = strings.TrimSpace(s)
+	depth := 0
+	for strings.HasPrefix(s, "(") {
+		matchDepth := 0
+		closeAt := -1
+		for i := 0; i < len(s); i++ {
+			switch s[i] {
+			case '(':
+				matchDepth++
+			case ')':
+				matchDepth--
+				if matchDepth == 0 {
+					closeAt = i
+				}
+			}
+			if closeAt >= 0 {
+				break
+			}
+		}
+		// Only count this layer if its closing paren is the last
+		// non-whitespace character in the string -- otherwise something
+		// follows it (a UNION, a trailing LIMIT, ...) and the wrap isn't
+		// whole-statement, so matches inside it stay at their real depth.
+		if closeAt < 0 || strings.TrimSpace(s[closeAt+1:]) != "" {
+			break
+		}
+		inner := strings.TrimSpace(s[1:closeAt])
+		if inner == "" {
+			break
+		}
+		depth++
+		s = inner
+	}
+	return depth
+}
+
 // queryHasClause reports whether a SQL statement already contains a
 // top-level LIMIT or OFFSET clause. It checks the statement's residue, with
 // comments removed and string literals, dollar-quoted blocks and quoted
@@ -98,16 +192,22 @@ var offsetKeywordPattern = regexp.MustCompile(`(?i)(?:^|[^A-Z0-9_$])(OFFSET)(?:[
 // cap by mentioning "limit" or "offset" in a string literal, a quoted
 // column alias, or a comment (issue #260).
 //
-// A match only counts at parenthesis depth zero, so a LIMIT/OFFSET that
-// belongs to a subquery or CTE, such as
+// A match only counts at the statement's effective top level: parenthesis
+// depth zero for an unwrapped statement, so a LIMIT/OFFSET that belongs to
+// a subquery or CTE, such as
 // "SELECT * FROM t WHERE id IN (SELECT id FROM u LIMIT 1)", isn't mistaken
-// for a clause on the outer statement.
+// for a clause on the outer statement; or redundantWrapDepth deeper when
+// the whole statement is itself wrapped in parentheses, such as
+// "(SELECT * FROM t LIMIT 5)", so that case isn't mistaken for having no
+// top-level clause at all and getting a second one appended alongside it
+// (issue #275 follow-up).
 func queryHasClause(pattern *regexp.Regexp, sqlQuery string) bool {
 	residue, _ := sqltext.Strip(sqlQuery)
+	topLevelDepth := redundantWrapDepth(residue)
 	for _, loc := range pattern.FindAllStringSubmatchIndex(residue, -1) {
 		// loc[2] and loc[3] bound the captured keyword itself, excluding
 		// the boundary characters matched alongside it.
-		if parenDepthAt(residue, loc[2]) == 0 {
+		if parenDepthAt(residue, loc[2]) == topLevelDepth {
 			return true
 		}
 	}
@@ -332,9 +432,10 @@ To avoid rate limits (30,000 input tokens/minute):
 			// against the statement's residue rather than raw text, so a
 			// literal or identifier that merely mentions "limit"/"offset"
 			// doesn't defeat the safety cap (issue #260).
-			upperQuery := strings.ToUpper(strings.TrimSpace(sqlQuery))
 			hasExistingLimit := queryHasClause(limitKeywordPattern, sqlQuery)
 			hasExistingOffset := queryHasClause(offsetKeywordPattern, sqlQuery)
+
+			upperQuery := normalizeForClassification(sqlQuery)
 
 			// Check if this is a SELECT query - only SELECT queries support LIMIT/OFFSET
 			// DDL (CREATE, ALTER, DROP) and DML (INSERT, UPDATE, DELETE) don't support LIMIT
