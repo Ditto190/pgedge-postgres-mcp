@@ -523,6 +523,72 @@ var queryHasClauseTests = []struct {
 		pattern:        limitKeywordPattern,
 		expectDetected: true,
 	},
+	{
+		name:           "FETCH FIRST n ROWS ONLY is a limit clause",
+		query:          "SELECT * FROM t FETCH FIRST 200 ROWS ONLY",
+		pattern:        fetchFirstPattern,
+		expectDetected: true,
+	},
+	{
+		name:           "FETCH NEXT n ROW ONLY is a limit clause",
+		query:          "SELECT * FROM t OFFSET 5 FETCH NEXT 1 ROW ONLY",
+		pattern:        fetchFirstPattern,
+		expectDetected: true,
+	},
+	{
+		name:           "FETCH FIRST ROW ONLY without a count is a limit clause",
+		query:          "SELECT * FROM t FETCH FIRST ROW ONLY",
+		pattern:        fetchFirstPattern,
+		expectDetected: true,
+	},
+	{
+		name:           "FETCH FIRST inside a subquery is not an outer clause",
+		query:          "SELECT * FROM parent WHERE id IN (SELECT parent_id FROM child FETCH FIRST 1 ROW ONLY)",
+		pattern:        fetchFirstPattern,
+		expectDetected: false,
+	},
+	{
+		name:           "word FETCH in a comment is not a clause",
+		query:          "SELECT * FROM t -- FETCH FIRST 1 ROW ONLY\n",
+		pattern:        fetchFirstPattern,
+		expectDetected: false,
+	},
+	{
+		name:           "plain LIMIT query does not match the FETCH pattern",
+		query:          "SELECT * FROM t LIMIT 10",
+		pattern:        fetchFirstPattern,
+		expectDetected: false,
+	},
+	{
+		name:           "FETCH FIRST n ROWS WITH TIES is a limit clause",
+		query:          "SELECT * FROM t ORDER BY val FETCH FIRST 3 ROWS WITH TIES",
+		pattern:        fetchFirstPattern,
+		expectDetected: true,
+	},
+	{
+		name:           "FETCH NEXT n ROWS WITH TIES is a limit clause",
+		query:          "SELECT * FROM t ORDER BY val OFFSET 1 FETCH NEXT 3 ROWS WITH TIES",
+		pattern:        fetchFirstPattern,
+		expectDetected: true,
+	},
+	{
+		name:           "FETCH FIRST ... WITH TIES with extra whitespace is still a limit clause",
+		query:          "SELECT * FROM t ORDER BY val FETCH FIRST 3 ROWS  WITH   TIES",
+		pattern:        fetchFirstPattern,
+		expectDetected: true,
+	},
+	{
+		name:           "FETCH FIRST ... ROWS WITHOUT TIES does not falsely match WITH TIES",
+		query:          "SELECT * FROM t ORDER BY val FETCH FIRST 3 ROWS WITHOUT TIES",
+		pattern:        fetchFirstPattern,
+		expectDetected: false,
+	},
+	{
+		name:           "FETCH FIRST ... WITH TIES inside a subquery is not an outer clause",
+		query:          "SELECT * FROM parent WHERE id IN (SELECT id FROM child ORDER BY val FETCH FIRST 1 ROWS WITH TIES)",
+		pattern:        fetchFirstPattern,
+		expectDetected: false,
+	},
 }
 
 func TestStripLeadingParens(t *testing.T) {
