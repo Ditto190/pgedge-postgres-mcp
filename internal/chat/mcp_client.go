@@ -28,7 +28,7 @@ import (
 )
 
 // ClientVersion is the version of the CLI/chat client
-const ClientVersion = "1.1.0-beta1"
+const ClientVersion = "1.1.0-beta2"
 
 // MCPClient provides a unified interface for communicating with MCP servers
 // via both stdio and HTTP modes

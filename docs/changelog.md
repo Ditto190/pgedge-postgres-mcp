@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [1.1.0-beta2] - 2026-08-26
+
 ### Fixed
 
 - Disabled the knowledgebase by default in the packaged
