@@ -13,6 +13,20 @@ and this project adheres to
 
 ### Fixed
 
+- The release workflow's "Create Web UI archive" step no longer fails
+  once `web/dist` holds more than ten files. It listed the archive's
+  contents with `tar -tzf web.tar.gz | head` under `set -euo pipefail`,
+  so `head` closed the pipe before `tar` had finished writing, `tar`
+  exited non-zero on the resulting `SIGPIPE`, and the step failed even
+  though the archive itself was correct. This blocked the whole release
+  build for 1.1.0-beta2, which is why that version has no published
+  artifacts and this one was cut in its place; nothing else changed
+  between the two.
+
+## [1.1.0-beta2] - 2026-08-26
+
+### Fixed
+
 - Disabled the knowledgebase by default in the packaged
   `postgres-mcp.yaml`; the shipped `database_path` never existed,
   since the actual filename depends on the embedding provider and
@@ -47,7 +61,7 @@ and this project adheres to
   fallback (e.g. OpenAI Codex) previously refused to connect because
   the reported revision predated that transport outright.
 
-## [1.1.0] - 2026-08-17
+## [1.1.0-beta1] - 2026-08-17
 
 ### Added
 
@@ -839,6 +853,19 @@ and this project adheres to
 
 ### Security
 
+- Eleven of the entries below link to one of five published security
+  advisories: [GHSA-j7mp-839j-jrm7] (read-only mode bypassed by SQL statement
+  smuggling), [GHSA-6hg5-9f3w-c886] (the `Origin` header was not validated,
+  allowing DNS rebinding), [GHSA-v44x-hxg7-5cgc] (custom tools wrote without
+  the user confirming), [GHSA-v347-v3w7-7fq9] (login rate limiting evaded
+  through a caller-supplied header), and [GHSA-fhv3-x3jh-grj7] (SQL injection
+  in the `count_rows` `where` parameter). Each advisory carries the current
+  identifiers for the issue it describes, including a CVE once one is assigned;
+  none had been assigned at the time of writing. All five are fixed from this
+  release onwards, so upgrading to 1.1.0 or later covers every one of them, but
+  three ask for something beyond the upgrade itself, which is noted on the
+  entries below.
+
 - `release.yml`'s `build-web`, `build-amd64`, and `build-arm64` jobs run on
   every `workflow_dispatch`, not just tag pushes, so a manual test run on
   an arbitrary branch could write to the same npm/Go dependency caches a
@@ -873,6 +900,11 @@ and this project adheres to
   output, and a malformed entry stops the server rather than being
   ignored. See [Security](guide/security.md) and
   [Configuration](guide/configuration.md) for details. Fixes #231.
+
+  Covered by advisory [GHSA-6hg5-9f3w-c886], which records the configuration
+  step above as the one thing an upgrade does not do for you: a deployment
+  serving the web client under a real hostname must list that origin, or its
+  own browser requests will be refused.
 
 - The write-confirmation prompt in both clients now recognises a write whose
   first keyword reads. It classified a statement by that keyword alone, so
@@ -910,6 +942,8 @@ and this project adheres to
   nothing textual could tell otherwise. What prevents a write on a read-only
   connection remains the transaction access mode set by the server.
 
+  Part of the fix covered by advisory [GHSA-v44x-hxg7-5cgc].
+
 - Raised the `go.mod` floor from 1.26.1 to 1.26.5. Building this server
   with the actual go1.26.3 toolchain and running `govulncheck` in binary
   mode showed crypto/tls, net/textproto, and crypto/x509 stdlib
@@ -936,6 +970,11 @@ and this project adheres to
   lockout is keyed on the username and was unaffected. The nginx examples
   in the documentation now set `X-Forwarded-For` to `$remote_addr` rather
   than `$proxy_add_x_forwarded_for`.
+
+  Covered by advisory [GHSA-v347-v3w7-7fq9], which asks anyone terminating TLS
+  or proxying in front of the server to configure `http.client_ip` to match
+  when upgrading, since otherwise legitimate clients are grouped into a single
+  limiter bucket.
 
 - `count_rows`'s `where` parameter now rejects a subquery. The parameter is
   interpolated directly into the generated `SELECT COUNT(*)` statement, and
@@ -967,6 +1006,10 @@ and this project adheres to
   'x' OR 1=1"`) both remain possible and are out of scope for this fix:
   neither lets a caller read another table's contents, which is what
   issue #200 reported.
+
+  Covered by advisory [GHSA-fhv3-x3jh-grj7], which also notes that granting the
+  connecting role `SELECT` on only the tables a deployment means to expose
+  bounds what such an oracle can reach, and is worth doing regardless.
 
 - Upgraded `github.com/jackc/pgx/v5` from 5.7.6 to 5.10.0, resolving three
   advisories against the PostgreSQL driver. Two are memory-safety issues
@@ -1016,6 +1059,8 @@ and this project adheres to
   assumed to write, so an incorrect guess costs a confirmation prompt
   rather than an unannounced write.
 
+  Part of the fix covered by advisory [GHSA-v44x-hxg7-5cgc].
+
 - The CLI and the web client now ask for confirmation before any tool call
   that the server advertises as capable of writing, rather than only before
   a write through `query_database`. A custom tool that modified data
@@ -1031,6 +1076,11 @@ and this project adheres to
   which is the only client that sends a system prompt; the web client
   sends none, so it receives neither that rule nor the pre-existing
   read-only safety instructions.
+
+  Covered by advisory [GHSA-v44x-hxg7-5cgc], which asks operators to review
+  their own custom tool definitions for statements that write behind a leading
+  `SELECT`, `WITH` or `EXPLAIN`, since that identifies which of their tools ran
+  unprompted on an affected version.
 
 - Provider API keys are no longer disclosed in error output. When an LLM or
   embedding provider rejects a credential it commonly quotes that credential
@@ -1091,6 +1141,11 @@ and this project adheres to
   `allow_writes: true` keep the previous behaviour, including support
   for multi-statement scripts.
 
+  Covered by advisory [GHSA-j7mp-839j-jrm7], which needs action beyond
+  upgrading: review your database audit logs for unexpected DDL or DML issued
+  through the MCP connection, because the upgrade prevents further writes but
+  cannot tell you whether any already happened.
+
 - The read-only statement guard now recognises the transaction access
   mode, which it previously ignored altogether: it matched only the
   literal strings `transaction_read_only` and
@@ -1109,6 +1164,8 @@ and this project adheres to
   statements are logged in full, since a rejection records an attempt
   to escape read-only mode.
 
+  Part of the fix covered by advisory [GHSA-j7mp-839j-jrm7].
+
 - The session-level `default_transaction_read_only` setting is now
   re-applied when a pooled connection is released, and a connection
   whose state cannot be confirmed is discarded rather than reused.
@@ -1120,6 +1177,8 @@ and this project adheres to
   for any path that did not, such as the custom tool executor's
   `pl-func` type, and it left the session-level layer disabled for the
   rest of that connection's life.
+
+  Part of the fix covered by advisory [GHSA-j7mp-839j-jrm7].
 
 - The custom tools framework now has end-to-end test coverage. It is
   invisible until an operator sets `custom_definitions_path`, so none of its
@@ -1141,12 +1200,16 @@ and this project adheres to
   Delimiters are now generated per invocation, for `pl-func` tools as
   well, and an argument that carries one is refused.
 
+  Part of the fix covered by advisory [GHSA-j7mp-839j-jrm7].
+
 - Read-only transactions now request their access mode as part of
   `BEGIN` rather than issuing `SET TRANSACTION READ ONLY` as a
   following statement, in `query_database`, `count_rows`,
   `execute_explain`, and the custom tool executor. The transaction is
   therefore never briefly writable, and the mode cannot fail to apply
   independently of the transaction starting.
+
+  Part of the fix covered by advisory [GHSA-j7mp-839j-jrm7].
 
 - `golang.org/x/crypto` moves from v0.54.0 to v0.55.0, so the TLS and
   SSH primitives this server depends on carry the latest upstream
@@ -2095,14 +2158,23 @@ software is now feature-complete and ready for broader testing.
 - CI/CD pipeline documentation
 - Testing guide for contributors
 
-[Unreleased]: https://github.com/pgEdge/pgedge-nla/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/pgEdge/pgedge-nla/compare/v1.0.0-beta3...v1.0.0
-[1.0.0-beta3]: https://github.com/pgEdge/pgedge-nla/releases/tag/v1.0.0-beta3
-[1.0.0-beta2]: https://github.com/pgEdge/pgedge-nla/releases/tag/v1.0.0-beta2
-[1.0.0-beta1]: https://github.com/pgEdge/pgedge-nla/releases/tag/v1.0.0-beta1
-[1.0.0-alpha6]: https://github.com/pgEdge/pgedge-nla/releases/tag/v1.0.0-alpha6
-[1.0.0-alpha5]: https://github.com/pgEdge/pgedge-nla/releases/tag/v1.0.0-alpha5
+[Unreleased]: https://github.com/pgEdge/pgedge-postgres-mcp/compare/v1.1.0-beta3...HEAD
+[1.1.0-beta3]: https://github.com/pgEdge/pgedge-postgres-mcp/compare/v1.1.0-beta2...v1.1.0-beta3
+[1.1.0-beta2]: https://github.com/pgEdge/pgedge-postgres-mcp/compare/v1.1.0-beta1...v1.1.0-beta2
+[1.1.0-beta1]: https://github.com/pgEdge/pgedge-postgres-mcp/compare/v1.0.0...v1.1.0-beta1
+[1.0.0]: https://github.com/pgEdge/pgedge-postgres-mcp/compare/v1.0.0-beta3...v1.0.0
+[1.0.0-beta3]: https://github.com/pgEdge/pgedge-postgres-mcp/releases/tag/v1.0.0-beta3
+[1.0.0-beta2]: https://github.com/pgEdge/pgedge-postgres-mcp/releases/tag/v1.0.0-beta2
+[1.0.0-beta1]: https://github.com/pgEdge/pgedge-postgres-mcp/releases/tag/v1.0.0-beta1
+[1.0.0-alpha6]: https://github.com/pgEdge/pgedge-postgres-mcp/releases/tag/v1.0.0-alpha6
+[1.0.0-alpha5]: https://github.com/pgEdge/pgedge-postgres-mcp/releases/tag/v1.0.0-alpha5
 [1.0.0-alpha4]: https://github.com/pgEdge/pgedge-postgres-mcp/releases/tag/v1.0.0-alpha4
 [1.0.0-alpha3]: https://github.com/pgEdge/pgedge-postgres-mcp/releases/tag/v1.0.0-alpha3
 [1.0.0-alpha2]: https://github.com/pgEdge/pgedge-postgres-mcp/releases/tag/v1.0.0-alpha2
 [1.0.0-alpha1]: https://github.com/pgEdge/pgedge-postgres-mcp/releases/tag/v1.0.0-alpha1
+
+[GHSA-j7mp-839j-jrm7]: https://github.com/pgEdge/pgedge-postgres-mcp/security/advisories/GHSA-j7mp-839j-jrm7
+[GHSA-6hg5-9f3w-c886]: https://github.com/pgEdge/pgedge-postgres-mcp/security/advisories/GHSA-6hg5-9f3w-c886
+[GHSA-v44x-hxg7-5cgc]: https://github.com/pgEdge/pgedge-postgres-mcp/security/advisories/GHSA-v44x-hxg7-5cgc
+[GHSA-v347-v3w7-7fq9]: https://github.com/pgEdge/pgedge-postgres-mcp/security/advisories/GHSA-v347-v3w7-7fq9
+[GHSA-fhv3-x3jh-grj7]: https://github.com/pgEdge/pgedge-postgres-mcp/security/advisories/GHSA-fhv3-x3jh-grj7
