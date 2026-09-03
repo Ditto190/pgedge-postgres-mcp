@@ -1,6 +1,6 @@
 module pgedge-postgres-mcp
 
-go 1.26.8
+go 1.26.7
 
 require (
 	github.com/charmbracelet/glamour v1.0.0
