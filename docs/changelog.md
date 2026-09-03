@@ -9,6 +9,43 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-03
+
+### Security
+
+- Raised the `go.mod` floor from 1.26.5 to 1.26.7. Building this server
+  with the go1.26.5 toolchain and running `govulncheck` showed six
+  standard library vulnerabilities reachable from this code, in
+  `encoding/asn1` by way of the TLS certificate loader and in `net/http`
+  by way of the chat client's own requests among them, all of which
+  upstream fixed in 1.26.6; rebuilding with 1.26.7 drops that count to
+  zero. Continuous integration and the Dockerfiles already float on the
+  latest `1.26` patch release, so this raises the floor rather than
+  changing what a fresh build produces. The floor deliberately stops at
+  1.26.7 rather than the newer 1.26.8, because the workflows run with
+  `GOTOOLCHAIN=local` and `actions/setup-go` resolves `1.26` to 1.26.7
+  for now, so a higher floor fails the build outright rather than
+  fetching a toolchain.
+
+### Changed
+
+- Updated `golang.org/x/crypto` from 0.55.0 to 0.56.0 and
+  `modernc.org/sqlite` from 1.57.0 to 1.58.0, together with the
+  `goldmark`, `go-runewidth`, `libc` and `charmbracelet` packages they
+  bring with them. Nothing in this project's own code changes with the
+  upgrades; they are taken so that the release starts from a current
+  base rather than a superseded one.
+
+- Updated the web client's dependencies, most visibly Material UI from
+  9.3.1 to 9.4.0, along with `happy-dom`, `puppeteer` and the testing
+  library packages. Vitest and its companion packages stay at 4.1.11,
+  since 5.0.0 is a major release of test-only tooling and taking it
+  days before a release candidate buys nothing.
+
+- Moved the two GitHub Actions pins that had fallen behind:
+  `docker/setup-buildx-action` to v4.3.0 and `softprops/action-gh-release`
+  to v3.0.3. Every other action pin was already current.
+
 ## [1.1.0-beta3] - 2026-08-26
 
 ### Fixed
@@ -2158,7 +2195,8 @@ software is now feature-complete and ready for broader testing.
 - CI/CD pipeline documentation
 - Testing guide for contributors
 
-[Unreleased]: https://github.com/pgEdge/pgedge-postgres-mcp/compare/v1.1.0-beta3...HEAD
+[Unreleased]: https://github.com/pgEdge/pgedge-postgres-mcp/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/pgEdge/pgedge-postgres-mcp/compare/v1.1.0-beta3...v1.1.0
 [1.1.0-beta3]: https://github.com/pgEdge/pgedge-postgres-mcp/compare/v1.1.0-beta2...v1.1.0-beta3
 [1.1.0-beta2]: https://github.com/pgEdge/pgedge-postgres-mcp/compare/v1.1.0-beta1...v1.1.0-beta2
 [1.1.0-beta1]: https://github.com/pgEdge/pgedge-postgres-mcp/compare/v1.0.0...v1.1.0-beta1
